@@ -1,7 +1,7 @@
 # conversation/
 
 A spec ↔ implementation channel between two parties and their agents, managed by
-[collabkit](https://github.com/{{github_org}}/collabkit). Read this at the start of every session.
+[collabkit](https://github.com/Syncio-Tech/collab-kit). Read this at the start of every session.
 
 <!-- collabkit:start -->
 ## Parties

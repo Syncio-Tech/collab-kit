@@ -35,5 +35,13 @@
   "devDependencies": {
     "typescript": "^5.6.0",
     "@types/node": "^22.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Syncio-Tech/collab-kit.git"
+  },
+  "homepage": "https://github.com/Syncio-Tech/collab-kit#readme",
+  "bugs": {
+    "url": "https://github.com/Syncio-Tech/collab-kit/issues"
   }
 }
