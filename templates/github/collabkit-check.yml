@@ -1,5 +1,5 @@
 # managed by collabkit {{version}}
-name: collabkit check
+name: collab check
 on:
   pull_request:
     paths: ["conversation/**"]
@@ -11,4 +11,4 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
-      - run: npx --yes collabkit-cli@{{version}} check --pr --base origin/${{ github.base_ref }}
+      - run: npx --yes -p collabkit-cli@{{version}} collab check --pr --base origin/${{ github.base_ref }}

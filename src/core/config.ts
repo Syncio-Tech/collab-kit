@@ -25,7 +25,7 @@ export const CONFIG_REL = "conversation/config.yml";
 
 export function loadConfig(specRoot: string): Config {
   const p = join(specRoot, CONFIG_REL);
-  if (!exists(p)) throw new CliError(`No ${CONFIG_REL} in ${specRoot}. Run \`collabkit init\` there first.`);
+  if (!exists(p)) throw new CliError(`No ${CONFIG_REL} in ${specRoot}. Run \`collab init\` there first.`);
   const raw = YAML.parse(readText(p)) ?? {};
   const cfg: Config = {
     schema_version: raw.schema_version ?? 1,

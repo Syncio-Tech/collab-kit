@@ -145,7 +145,7 @@ export function check(root: string, cfg: Config, opts: CheckOpts = {}): Diag[] {
 
   // index freshness
   const ip = indexPath(root, cfg);
-  if (exists(ip) && readText(ip) !== renderIndex(root, cfg)) err("index-stale", rel(root, ip), "INDEX.md is out of date: run `collabkit index`");
+  if (exists(ip) && readText(ip) !== renderIndex(root, cfg)) err("index-stale", rel(root, ip), "INDEX.md is out of date: run `collab index`");
 
   // PR scope
   if (base && repo) {
@@ -177,6 +177,6 @@ export function check(root: string, cfg: Config, opts: CheckOpts = {}): Diag[] {
 }
 
 export function formatDiags(ds: Diag[]): string {
-  if (!ds.length) return "collabkit check: OK";
+  if (!ds.length) return "collab check: OK";
   return ds.map((d) => `${d.severity.toUpperCase().padEnd(5)} ${d.code.padEnd(20)} ${d.file ? d.file + ": " : ""}${d.msg}`).join("\n");
 }

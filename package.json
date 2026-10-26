@@ -3,16 +3,37 @@
   "version": "0.1.0",
   "description": "Agent-agnostic conversation channel between a spec owner and an implementer, living in the spec repo.",
   "type": "module",
-  "bin": { "collabkit": "dist/cli.js" },
-  "files": ["dist", "templates", "README.md", "LICENSE"],
-  "engines": { "node": ">=20" },
+  "bin": {
+    "collab": "dist/cli.js",
+    "collabkit": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "templates",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
     "test": "npm run build && node --test test/*.test.mjs",
     "prepublishOnly": "npm test"
   },
-  "keywords": ["ai-agents", "spec", "collaboration", "cli", "github"],
+  "keywords": [
+    "ai-agents",
+    "spec",
+    "collaboration",
+    "cli",
+    "github"
+  ],
   "license": "MIT",
-  "dependencies": { "yaml": "^2.5.0" },
-  "devDependencies": { "typescript": "^5.6.0", "@types/node": "^22.0.0" }
+  "dependencies": {
+    "yaml": "^2.5.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
 }

@@ -97,7 +97,7 @@ function writeManifest(root: string, files: string[]) {
 export function cmdLink(cwd: string, pos: string[], f: Flags) {
   const work = resolve(cwd);
   const specArg = pos[0];
-  if (!specArg) throw new CliError("usage: collabkit link <path-to-spec-repo> [--as agent-b] [--integration generic,claude]");
+  if (!specArg) throw new CliError("usage: collab link <path-to-spec-repo> [--as agent-b] [--integration generic,claude]");
   const spec = resolve(work, specArg);
   if (!exists(join(spec, CONFIG_REL))) throw new CliError(`${spec} has no ${CONFIG_REL}`);
   const cfg = loadConfig(spec);
@@ -156,19 +156,19 @@ export function cmdOpen(ctx: Ctx, f: Flags) {
   writeText(file, stringify(doc));
   writeText(indexPath(ctx.specRoot, ctx.cfg), renderIndex(ctx.specRoot, ctx.cfg));
   log(`opened ${id} -> ${relative(process.cwd(), file)}`);
-  log(parked ? `requirement ${NO_REQUIREMENT}: parked immediately` : `waiting for ${doc.data.waiting_for}. Fill the sections, then \`collabkit check\` and \`collabkit submit ${id}\`.`);
+  log(parked ? `requirement ${NO_REQUIREMENT}: parked immediately` : `waiting for ${doc.data.waiting_for}. Fill the sections, then \`collab check\` and \`collab submit ${id}\`.`);
 }
 
 export function cmdReply(ctx: Ctx, pos: string[], f: Flags) {
   const m = me(ctx);
   const t = getTicket(ctx, pos[0]);
   const st = t.doc.data.state as State;
-  if (["rejected", "conformed"].includes(st)) throw new CliError(`${t.id} is ${st}; reopen with \`collabkit state ${t.id} discussing\` first`);
+  if (["rejected", "conformed"].includes(st)) throw new CliError(`${t.id} is ${st}; reopen with \`collab state ${t.id} discussing\` first`);
   const points = (str(f, "points", "P1")!).split(",").map((s) => s.trim()).filter(Boolean);
   for (const p of points) {
     const used = t.turns.filter((x) => x.by === m.id && (x.doc.data.points ?? []).includes(p)).length;
     if (used >= ctx.cfg.max_turns_per_point)
-      throw new CliError(`you already used ${used}/${ctx.cfg.max_turns_per_point} turns on ${p}. Escalate: \`collabkit state ${t.id} discussing --level T2\` and record the options in the conclusion.`);
+      throw new CliError(`you already used ${used}/${ctx.cfg.max_turns_per_point} turns on ${p}. Escalate: \`collab state ${t.id} discussing --level T2\` and record the options in the conclusion.`);
   }
   const n = (t.turns.at(-1)?.n ?? 0) + 1;
   if (n >= 99) throw new CliError("turn limit of the folder reached");
@@ -190,14 +190,14 @@ export function cmdConclude(ctx: Ctx, pos: string[]) {
   if (t.doc.data.state === "open") t.doc.data.state = "discussing";
   if (m.kind === "agent") t.doc.data.waiting_for = counterpartAgent(ctx.cfg, m.role);
   save(ctx, t);
-  log(`conclusion -> ${relative(process.cwd(), t.conclusionFile)}. Write it, then \`collabkit sign ${t.id}\`.`);
+  log(`conclusion -> ${relative(process.cwd(), t.conclusionFile)}. Write it, then \`collab sign ${t.id}\`.`);
 }
 
 export function cmdSign(ctx: Ctx, pos: string[]) {
   const m = me(ctx);
-  if (m.kind !== "agent") throw new CliError("only agents sign the conclusion; humans use `collabkit decide`");
+  if (m.kind !== "agent") throw new CliError("only agents sign the conclusion; humans use `collab decide`");
   const t = getTicket(ctx, pos[0]);
-  if (!exists(t.conclusionFile)) throw new CliError(`no ${CONCLUSION}; run \`collabkit conclude ${t.id}\``);
+  if (!exists(t.conclusionFile)) throw new CliError(`no ${CONCLUSION}; run \`collab conclude ${t.id}\``);
   const c = parse(readText(t.conclusionFile));
   c.data.signatures = { ...(c.data.signatures ?? {}), [m.id]: nowIso() };
   writeText(t.conclusionFile, stringify(c));
@@ -245,7 +245,7 @@ export function cmdState(ctx: Ctx, pos: string[], f: Flags) {
   }
   if (to !== d.state) {
     if (!TRANSITIONS[d.state as State].includes(to)) throw new CliError(`invalid transition ${d.state} -> ${to}`);
-    if (["approved", "parked", "rejected"].includes(to)) throw new CliError("use `collabkit decide` for approve/park/reject");
+    if (["approved", "parked", "rejected"].includes(to)) throw new CliError("use `collab decide` for approve/park/reject");
     if (to === "in-spec") { d.spec_change_ref = need(f, "ref"); d.waiting_for = ctx.cfg.parties.implementer.agent; }
     if (to === "conformed") {
       if (levelIdx(d.level) >= 2 && d.state !== "in-spec" && d.state !== "approved") throw new CliError("T2/T3 must be approved first");

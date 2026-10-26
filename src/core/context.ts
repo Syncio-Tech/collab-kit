@@ -26,11 +26,11 @@ export function loadCtx(cwd: string, asFlag?: string, requireMe = true): Ctx {
   let asId = asFlag ?? process.env.COLLABKIT_AS;
   if (!specRoot) {
     const linkDir = walkUp(cwd, ".collabkit/link.yml");
-    if (!linkDir) throw new CliError("Not inside a collabkit spec repo or a linked repo. Run `collabkit init` (spec repo) or `collabkit link <spec-repo>` (code repo).");
+    if (!linkDir) throw new CliError("Not inside a collabkit spec repo or a linked repo. Run `collab init` (spec repo) or `collab link <spec-repo>` (code repo).");
     const link = YAML.parse(readText(join(linkDir, ".collabkit/link.yml"))) ?? {};
     specRoot = resolve(linkDir, link.spec_repo ?? "");
     workRoot = linkDir;
-    if (!exists(join(specRoot, CONFIG_REL))) throw new CliError(`Linked spec repo not found at ${specRoot} (.collabkit/link.yml). Clone it there or re-run \`collabkit link\`.`);
+    if (!exists(join(specRoot, CONFIG_REL))) throw new CliError(`Linked spec repo not found at ${specRoot} (.collabkit/link.yml). Clone it there or re-run \`collab link\`.`);
     asId = asId ?? link.as;
   }
   if (!asId) {

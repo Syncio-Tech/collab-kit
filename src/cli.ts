@@ -3,25 +3,25 @@ import * as C from "./commands.js";
 import { loadCtx } from "./core/context.js";
 import { CliError, VERSION } from "./core/util.js";
 
-const HELP = `collabkit ${VERSION} - spec <-> implementation conversation channel for any agent
+const HELP = `collab (collabkit ${VERSION}) - spec <-> implementation conversation channel for any agent
 
 Setup
-  collabkit init [--project N] [--integration generic,claude] [--spec-agent agent-a --spec-human human-a --spec-mode agent_push]
+  collab init [--project N] [--integration generic,claude] [--spec-agent agent-a --spec-human human-a --spec-mode agent_push]
                  [--impl-agent agent-b --impl-human human-b --impl-mode human_commit] [--as ID] [--force]
-  collabkit link <spec-repo-path> [--as agent-b] [--integration generic,claude]
+  collab link <spec-repo-path> [--as agent-b] [--integration generic,claude]
 
 Daily
-  collabkit whoami
-  collabkit inbox [--all]
-  collabkit open --title T --level T0..T3 --reason R --requirement R|NO_REQUIREMENT [--spec-ref REF] [--area A]
-  collabkit reply <ID> [--points P1,P2] [--waiting-for ID]
-  collabkit conclude <ID>
-  collabkit sign <ID>
-  collabkit decide <ID> --decision approve|park|reject [--option O] [--note N]      (humans)
-  collabkit state <ID> [discussing|in-spec|conformed] [--level Tn] [--ref TAG] [--reason R]
-  collabkit index
-  collabkit check [--base REF] [--pr] [--json]
-  collabkit submit [<ID>] [--dry-run]
+  collab whoami
+  collab inbox [--all]
+  collab open --title T --level T0..T3 --reason R --requirement R|NO_REQUIREMENT [--spec-ref REF] [--area A]
+  collab reply <ID> [--points P1,P2] [--waiting-for ID]
+  collab conclude <ID>
+  collab sign <ID>
+  collab decide <ID> --decision approve|park|reject [--option O] [--note N]      (humans)
+  collab state <ID> [discussing|in-spec|conformed] [--level Tn] [--ref TAG] [--reason R]
+  collab index
+  collab check [--base REF] [--pr] [--json]
+  collab submit [<ID>] [--dry-run]
 
 Global: --as <id> (or COLLABKIT_AS, or .collabkit/local.yml / link.yml), --cwd <dir>
 `;
@@ -64,7 +64,7 @@ function main(): number {
     case "index": C.cmdIndex(ctx); return 0;
     case "check": return C.cmdCheck(ctx, flags);
     case "submit": C.cmdSubmit(ctx, pos, flags); return 0;
-    default: throw new CliError(`unknown command "${cmd}". Run \`collabkit help\`.`);
+    default: throw new CliError(`unknown command "${cmd}". Run \`collab help\`.`);
   }
 }
 

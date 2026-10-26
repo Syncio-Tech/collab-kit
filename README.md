@@ -28,13 +28,13 @@ spec repo (spec owner)                       code repo (implementer)
 └── .github/CODEOWNERS
 ```
 
-1. An agent opens a ticket (`collabkit open`) with a level T0–T3 and a pointer to the requirement.
-2. The other agent replies turn by turn (`collabkit reply`), at most N turns per point.
+1. An agent opens a ticket (`collab open`) with a level T0–T3 and a pointer to the requirement.
+2. The other agent replies turn by turn (`collab reply`), at most N turns per point.
 3. Both write and sign a conclusion; open disagreements become options for the human.
-4. The deciding human approves, parks or rejects (`collabkit decide`). T2/T3 → spec owner's human.
+4. The deciding human approves, parks or rejects (`collab decide`). T2/T3 → spec owner's human.
 5. Spec changes go through a separate spec PR and a tag; the ticket closes when the code matches that tag.
 
-Every change is a PR. Branch protection + CODEOWNERS + `collabkit check` in CI enforce the rules:
+Every change is a PR. Branch protection + CODEOWNERS + `collab check` in CI enforce the rules:
 only raise levels, append-only turns, valid state transitions, decisions by the right human,
 no secrets, no files outside `conversation/` in a conversation PR, weekly ticket cap.
 
@@ -42,8 +42,8 @@ no secrets, no files outside `conversation/` in a conversation PR, weekly ticket
 
 Per agent, in `config.yml`:
 
-- `agent_push` - the agent has a token; `collabkit submit` creates a branch, commits, pushes and opens a PR (`gh`).
-- `human_commit` - the agent has no token; `collabkit submit` prints the exact commands for its human.
+- `agent_push` - the agent has a token; `collab submit` creates a branch, commits, pushes and opens a PR (`gh`).
+- `human_commit` - the agent has no token; `collab submit` prints the exact commands for its human.
 
 ### Agent-agnostic
 
@@ -54,8 +54,11 @@ command can use collabkit; so can a human.
 ## Install
 
 ```bash
-npm i -g collabkit-cli        # or: npx collabkit-cli@0.1.0 <command>
+npm i -g collabkit-cli        # installs the `collab` command (alias: `collabkit`)
+npx -p collabkit-cli@0.1.0 collab <command>   # without installing
 ```
+
+The command is `collab`; `collabkit` is an alias for machines where another tool already owns `collab`.
 
 Node 20+. Git. `gh` optional (for opening PRs in `agent_push` mode).
 
@@ -64,11 +67,11 @@ Node 20+. Git. `gh` optional (for opening PRs in `agent_push` mode).
 Spec owner, in the spec repo:
 
 ```bash
-collabkit init --project acme --integration generic,claude \
+collab init --project acme --integration generic,claude \
   --spec-agent agent-a --spec-human human-a --spec-mode agent_push \
   --impl-agent agent-b --impl-human human-b --impl-mode human_commit \
   --spec-github <owner-login> --impl-github <implementer-login>
-git add -A && git commit -m "collabkit init" && git push
+git add -A && git commit -m "collab init" && git push
 # GitHub: protect main (require PR + code owner review), invite the implementer
 ```
 
@@ -76,8 +79,8 @@ Implementer, next to their code repo:
 
 ```bash
 git clone <spec repo> ../spec-acme
-cd my-code-repo && collabkit link ../spec-acme --integration claude
-collabkit inbox
+cd my-code-repo && collab link ../spec-acme --integration claude
+collab inbox
 ```
 
 ## Commands
