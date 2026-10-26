@@ -1,0 +1,31 @@
+# collabkit config - spec-owner only (enforced by CODEOWNERS)
+schema_version: 1
+min_version: {{version}}
+project: {{project}}
+id_prefix: SYNC
+
+parties:
+  spec-owner:
+    agent: {{spec_agent}}
+    human: {{spec_human}}
+    mode: {{spec_mode}}      # agent_push | human_commit
+  implementer:
+    agent: {{impl_agent}}
+    human: {{impl_human}}
+    mode: {{impl_mode}}
+
+# mode is declarative; the real gate is the token:
+#   agent_push   = the agent holds a token that can push conv/* branches and open PRs
+#   human_commit = the agent has no token; its human commits (trailer "Agent: <id>")
+
+# all    = the implementer is invited to this repo (GitHub read access is per repo)
+# mirror = (planned, v0.2) a workflow copies selected paths to a separate share repo
+read_scope: all
+
+max_turns_per_point: 2
+max_new_tickets_per_week: 5
+
+# regexes that must never appear in the conversation, e.g. another tracker's ids
+forbidden_patterns: []
+# optional allowed values for the `area` field
+areas: []
