@@ -59,11 +59,10 @@ test("full ticket lifecycle across both parties", () => {
   fillTicket(join(specB, "conversation/SYNC-001/ticket.md")); ok(code, "index");
   assert.match(ok(code, "inbox", "--all"), /SYNC-001\s+T1\s+open/);
   const sub = ok(code, "submit", "SYNC-001");
-  assert.match(sub, /human_commit mode/);
-  // the human runs the printed commands
-  const branch = /switch -c (\S+)/.exec(sub)[1];
-  gitc(specB, "switch", "-q", "-c", branch); gitc(specB, "add", "conversation");
-  gitc(specB, "commit", "-qm", "collab(SYNC-001): open", "-m", "Agent: agent-b"); gitc(specB, "push", "-q", "-u", "origin", branch);
+  assert.match(sub, /human_commit mode/); assert.match(sub, /collab ship SYNC-001/);   // agent stops, tells the human
+  // the human runs one command
+  const shipped = ok(code, "ship", "4".replace("4", "1"));
+  const branch = /pushed (\S+)/.exec(shipped)[1];
   mergeOnRemote(env, specA, branch);
 
   // A sees it, raises to T2 (point disputed), replies, submits in agent_push mode
@@ -264,4 +263,85 @@ test("0.2: inbox warns when the spec repo is on another branch", () => {
   gitc(repo, "add", "-A"); gitc(repo, "commit", "-qm", "init");
   gitc(repo, "switch", "-q", "-c", "old-branch");
   assert.match(ok(repo, "inbox", "--all"), /WARN .*not "main"/);
+});
+
+// ---------------------------------------------------------------- 0.3.0
+test("0.3: CI identity check - a turn or decision must be pushed by its party's login", () => {
+  const T = mkdtempSync(join(tmpdir(), "collabkit-"));
+  const repo = join(T, "spec");
+  sh(T, "git", ["init", "-q", "-b", "main", repo]); id(repo, "A");
+  ok(repo, "init", "--spec-github", "alice", "--impl-github", "bob");
+  gitc(repo, "add", "-A"); gitc(repo, "commit", "-qm", "init");
+  const tid = openFilled(repo, "T2", "agent-b");
+  let r = ck(repo, "check", "--base", "HEAD", "--actor", "alice");
+  assert.notEqual(r.code, 0); assert.match(r.out, /identity-mismatch.*only @bob/);
+  assert.match(ok(repo, "check", "--base", "HEAD", "--actor", "bob"), /OK|WARN/);
+  gitc(repo, "add", "-A"); gitc(repo, "commit", "-qm", "open");
+  agreeAndSign(repo, tid);
+  gitc(repo, "add", "-A"); gitc(repo, "commit", "-qm", "agreed");
+  ok(repo, "decide", tid, "--decision", "approve", "--as", "human-a");
+  r = ck(repo, "check", "--base", "HEAD", "--actor", "bob");
+  assert.notEqual(r.code, 0); assert.match(r.out, /decision by human-a was pushed by @bob/);
+  assert.match(ok(repo, "check", "--base", "HEAD", "--actor", "alice"), /OK|WARN/);
+});
+
+test("0.3: next tells each identity what to do, with commands", () => {
+  const repo = soloRepo();
+  const tid = openFilled(repo, "T2", "agent-b");
+  assert.match(ok(repo, "next", "--as", "agent-a"), new RegExp(`collab reply ${tid}`));
+  assert.match(ok(repo, "next", "--as", "agent-b"), /nothing waiting/);
+  ok(repo, "reply", tid, "--points", "P1", "--as", "agent-a"); agreeTurn(lastTurn(join(repo, "conversation", tid)));
+  assert.match(ok(repo, "next", "--as", "agent-b"), new RegExp(`collab conclude ${tid}`));
+  ok(repo, "conclude", tid, "--as", "agent-b"); fillConclusion(join(repo, "conversation", tid, "99-conclusion.md"));
+  ok(repo, "sign", tid, "--as", "agent-b");
+  assert.match(ok(repo, "next", "--as", "agent-a"), new RegExp(`collab sign ${tid}`));
+  ok(repo, "sign", tid, "--as", "agent-a");
+  assert.match(ok(repo, "next", "--as", "human-a"), new RegExp(`collab decide ${tid}=<option>`));
+});
+
+test("0.3: upgrade repins the workflow, refreshes rules, adds config keys, never touches tickets", () => {
+  const repo = soloRepo();
+  const tid = openFilled(repo, "T2", "agent-b");
+  const wf = join(repo, ".github/workflows/collabkit-check.yml");
+  writeFileSync(wf, readFileSync(wf, "utf8").replace(/collabkit-cli@[\d.]+/g, "collabkit-cli@0.1.1"));
+  const cf = join(repo, "conversation/config.yml");
+  writeFileSync(cf, readFileSync(cf, "utf8").replace(/^max_turns_per_ticket:.*\n/m, "").replace(/^\s+github:.*\n/gm, ""));
+  const rd = join(repo, "conversation/README.md");
+  writeFileSync(rd, readFileSync(rd, "utf8").replace("collab sync", "git pull"));
+  const ticketBefore = readFileSync(join(repo, "conversation", tid, "ticket.md"), "utf8");
+  const out = ok(repo, "upgrade", "--spec-github", "alice");
+  assert.match(out, /workflow|repinned/); assert.match(out, /config keys/); assert.match(out, /rules block/);
+  assert.match(readFileSync(wf, "utf8"), /collabkit-cli@0\.3\.0/);
+  assert.match(readFileSync(wf, "utf8"), /COLLAB_ACTOR/);              // full refresh, not just a repin
+  const cfg = readFileSync(cf, "utf8");
+  assert.match(cfg, /max_turns_per_ticket: 6/); assert.match(cfg, /github: alice/); assert.match(cfg, /# collabkit config/);
+  assert.match(readFileSync(rd, "utf8"), /collab sync/);
+  assert.equal(readFileSync(join(repo, "conversation", tid, "ticket.md"), "utf8"), ticketBefore);
+  assert.match(ok(repo, "upgrade"), /already up to date/);
+});
+
+test("0.3: printed git commands quote paths with spaces", () => {
+  const T = mkdtempSync(join(tmpdir(), "collabkit-"));
+  const spec = join(T, "spec repo"), code = join(T, "code");
+  sh(T, "git", ["init", "-q", "-b", "main", spec]); id(spec, "A");
+  ok(spec, "init"); gitc(spec, "add", "-A"); gitc(spec, "commit", "-qm", "init");
+  sh(T, "git", ["init", "-q", "-b", "main", code]);
+  ok(code, "link", "../spec repo");
+  ok(code, "open", "--title", "x", "--level", "T2", "--reason", "r", "--requirement", "human-a");
+  fillTicket(join(spec, "conversation/SYNC-001/ticket.md")); ok(code, "index");
+  const out = ok(code, "submit", "SYNC-001", "--dry-run");
+  assert.match(out, /git -C "\.\.\/spec repo" switch -c/);
+});
+
+test("0.3: sync and short ids", () => {
+  const env = setup();
+  const { specA } = env;
+  gitc(specA, "switch", "-q", "-c", "old");
+  assert.match(ok(specA, "sync"), /switched .* to main/);
+  ok(specA, "open", "--title", "x", "--level", "T2", "--reason", "r", "--requirement", "human-a");
+  const r = ck(specA, "sync");
+  assert.notEqual(r.code, 0); assert.match(r.out, /uncommitted changes/);
+  fillTicket(join(specA, "conversation/SYNC-001/ticket.md")); ok(specA, "index");
+  assert.match(ok(specA, "reply", "1", "--points", "P1", "--as", "agent-b"), /turn 01/);
+  assert.match(ok(specA), /SYNC-001/);                          // bare `collab` = next
 });

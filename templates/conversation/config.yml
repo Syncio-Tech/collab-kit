@@ -9,10 +9,12 @@ parties:
     agent: {{spec_agent}}
     human: {{spec_human}}
     mode: {{spec_mode}}      # agent_push | human_commit
+    github: {{spec_human_gh}}    # GitHub login allowed to push this party's turns, signatures, decisions
   implementer:
     agent: {{impl_agent}}
     human: {{impl_human}}
     mode: {{impl_mode}}
+    github: {{impl_human_gh}}
 
 # mode is declarative; the real gate is the token:
 #   agent_push   = the agent holds a token that can push conv/* branches and open PRs

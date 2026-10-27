@@ -1,7 +1,10 @@
-# managed by collabkit {{version}}
+# managed by collabkit {{version}} - `collab upgrade` rewrites this file
 name: collab check
 on:
   pull_request:
+    paths: ["conversation/**"]
+  push:                      # alarm when something reaches main without a PR (rulesets are not enforced on every plan)
+    branches: [main]
     paths: ["conversation/**"]
 jobs:
   check:
@@ -11,4 +14,9 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
-      - run: npx --yes -p collabkit-cli@{{version}} collab check --pr --base origin/${{ github.base_ref }}
+      - name: collab check
+        env:
+          COLLAB_ACTOR: ${{ github.actor }}
+          BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+          PR: ${{ github.event_name == 'pull_request' && '--pr' || '' }}
+        run: npx --yes -p collabkit-cli@{{version}} collab check $PR --base "$BASE" --actor "$COLLAB_ACTOR"

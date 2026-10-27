@@ -2,7 +2,7 @@
 
 {{where}} You are `{{me}}` ({{role}}). Your mode is `{{mode}}`.
 
-- At session start run `collab inbox`{{inbox_hint}}. Tell your human what is waiting before doing other work.
+- At session start run `collab next`{{inbox_hint}}: it lists what waits for you with the exact commands. Tell your human before doing other work.
 - Do every ticket action through collabkit (`open`, `reply`, `conclude`, `sign`, `state`). Never hand-edit ids, `INDEX.md`, or another party's turn files.
 - Read `{{conv}}/README.md` before your first ticket action in a session; it is the rulebook.
 - A conversation change touches only `{{conv}}/`. A spec change is a separate PR, only after approval.
@@ -12,5 +12,5 @@
 - Before a new turn: switch the spec repo to its default branch and pull (`collab inbox` warns if you forget).
 - Record disagreements as options for the human; do not concede just to close.
 - Never put secrets, credentials or customer data into the conversation.
-- Run `collab check` before `collab submit`. Never merge, never push to `main`.
-- If `collab` is not installed: `npx -p collabkit-cli@{{version}} collab <command>`.
+- Finish with `collab check`. In `human_commit` mode never run git or `collab ship`: tell your human to run `collab ship`. Never merge, never push to `main`.
+- Ticket ids can be short: `4` = `SYNC-004`. If `collab` is not installed: `npx -p collabkit-cli@{{version}} collab <command>`.
