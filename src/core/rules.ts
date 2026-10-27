@@ -111,6 +111,20 @@ export function check(root: string, cfg: Config, opts: CheckOpts = {}): Diag[] {
       if (exhausted && d.state === "discussing" && levelIdx(d.level) < 2) err("escalate", f, `point ${p} used ${cfg.max_turns_per_point} turns on each side without agreement: raise level to T2`);
     }
 
+    // unfilled templates: a turn or ticket that still carries the template text says nothing
+    const meaningful = (body: string) => body.split("\n").map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("#") && !l.startsWith("<!--")).length;
+    for (const turn of t.turns) {
+      const tf = rel(root, turn.file);
+      const b = turn.doc.body;
+      if (/<name>|^- agree \| disagree \| need data$|^- reason \+ evidence$/m.test(b) || meaningful(b) === 0)
+        err("turn-unfilled", tf, "turn still contains the template; write the reply for each point before submitting");
+    }
+    for (const sec of ["Problem", "Evidence"]) {
+      const m = new RegExp(`^## ${sec}[^\\n]*\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, "m").exec(t.doc.body);
+      if (m && meaningful(m[1]) === 0) err("ticket-unfilled", f, `section "${sec}" is empty`);
+    }
+
     // content scans
     const files = [t.file, ...t.turns.map((x) => x.file), ...(t.conclusion ? [t.conclusionFile] : [])];
     for (const file of files) {

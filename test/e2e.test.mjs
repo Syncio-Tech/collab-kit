@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, appendFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, appendFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,12 @@ const ck = (cwd, ...args) => {
 };
 const ok = (cwd, ...args) => { const r = ck(cwd, ...args); assert.equal(r.code, 0, r.out); return r.out; };
 const gitc = (cwd, ...a) => sh(cwd, "git", a);
+// write real content into a generated turn / ticket (what an agent must do)
+const fillTurn = (file) => writeFileSync(file, readFileSync(file, "utf8")
+  .replace(/<name>/g, "scope").replace("- agree | disagree | need data", "- disagree").replace("- reason + evidence", "- evidence: run 2026-10-27 shows 0 rows"));
+const fillTicket = (file) => writeFileSync(file, readFileSync(file, "utf8")
+  .replace("## Problem\n", "## Problem\nThe gate cannot be measured.\n").replace("## Evidence\n", "## Evidence\nQuery returns 0 rows.\n"));
+const lastTurn = (dir) => { const fs = readdirSync(dir).filter((n) => /^\d\d-/.test(n) && n !== "99-conclusion.md").sort(); return join(dir, fs.at(-1)); };
 const id = (dir, name) => { gitc(dir, "config", "user.email", `${name}@x`); gitc(dir, "config", "user.name", name); };
 
 function setup() {
@@ -46,6 +52,7 @@ test("full ticket lifecycle across both parties", () => {
   // B opens from its code repo; human_commit mode prints commands
   ok(code, "open", "--title", "Gate G3 cannot be measured on staging", "--level", "T1", "--reason", "repo fix",
      "--requirement", "human-a, kickoff 2026-10-20", "--spec-ref", "spec/GATE.md#GATE-003 @ v0.1.0");
+  fillTicket(join(specB, "conversation/SYNC-001/ticket.md")); ok(code, "index");
   assert.match(ok(code, "inbox", "--all"), /SYNC-001\s+T1\s+open/);
   const sub = ok(code, "submit", "SYNC-001");
   assert.match(sub, /human_commit mode/);
@@ -59,6 +66,7 @@ test("full ticket lifecycle across both parties", () => {
   assert.match(ok(specA, "inbox"), /SYNC-001/);
   ok(specA, "state", "SYNC-001", "discussing", "--level", "T2", "--reason", "changes a gate result");
   ok(specA, "reply", "SYNC-001", "--points", "P1");
+  fillTurn(lastTurn(join(specA, "conversation/SYNC-001")));
   const subA = ok(specA, "submit", "SYNC-001");
   assert.match(subA, /pushed conv\/SYNC-001-agent-a/);
   const brA = /pushed (\S+)/.exec(subA)[1];
@@ -68,6 +76,7 @@ test("full ticket lifecycle across both parties", () => {
   gitc(specB, "switch", "-q", "main"); gitc(specB, "pull", "-q", "origin", "main");
   assert.match(ok(code, "inbox"), /SYNC-001\s+T2\s+discussing/);
   ok(code, "reply", "SYNC-001", "--points", "P1");
+  fillTurn(lastTurn(join(specB, "conversation/SYNC-001")));
   ok(code, "conclude", "SYNC-001");
   ok(code, "sign", "SYNC-001");
   ok(specB, "sign", "SYNC-001", "--as", "agent-a");
@@ -85,6 +94,7 @@ test("rules: level lowering, edited turns, secrets, mixed PRs, turn limit", () =
   const env = setup();
   const { specA } = env;
   ok(specA, "open", "--title", "x", "--level", "T2", "--reason", "r", "--requirement", "human-a");
+  fillTicket(join(specA, "conversation/SYNC-001/ticket.md")); ok(specA, "index");
   gitc(specA, "add", "-A"); gitc(specA, "commit", "-qm", "open");
 
   // agent cannot lower via CLI
@@ -97,6 +107,7 @@ test("rules: level lowering, edited turns, secrets, mixed PRs, turn limit", () =
 
   // turns are append-only
   ok(specA, "reply", "SYNC-001", "--points", "P1", "--as", "agent-b");
+  fillTurn(lastTurn(join(specA, "conversation/SYNC-001")));
   gitc(specA, "add", "-A"); gitc(specA, "commit", "-qm", "turn");
   appendFileSync(join(specA, "conversation/SYNC-001/01-agent-b.md"), "\nedit\n");
   assert.match(ck(specA, "check").out, /turn-edited/);
@@ -145,4 +156,19 @@ test("init PR may touch files outside conversation/; ticket PR may not", () => {
 test("piping into head does not crash", () => {
   const r = spawnSync("sh", ["-c", `node ${CLI} help | head -1`], { encoding: "utf8" });
   assert.equal(r.status, 0); assert.doesNotMatch(r.stderr, /EPIPE/);
+});
+
+test("an unfilled turn or ticket fails check", () => {
+  const T = mkdtempSync(join(tmpdir(), "collabkit-"));
+  const repo = join(T, "spec");
+  sh(T, "git", ["init", "-q", "-b", "main", repo]); id(repo, "A");
+  ok(repo, "init");
+  ok(repo, "open", "--title", "x", "--level", "T2", "--reason", "r", "--requirement", "human-a");
+  assert.match(ck(repo, "check").out, /ticket-unfilled/);
+  fillTicket(join(repo, "conversation/SYNC-001/ticket.md")); ok(repo, "index");
+  ok(repo, "reply", "SYNC-001", "--points", "P1", "--as", "agent-b");
+  const r = ck(repo, "check");
+  assert.notEqual(r.code, 0); assert.match(r.out, /turn-unfilled/);
+  fillTurn(lastTurn(join(repo, "conversation/SYNC-001")));
+  assert.match(ok(repo, "check"), /OK/);
 });

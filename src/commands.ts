@@ -181,6 +181,7 @@ export function cmdReply(ctx: Ctx, pos: string[], f: Flags) {
   t.turns.push({ n, by: m.id, file, doc: parse(readText(file)) });
   save(ctx, t);
   log(`turn ${nn} -> ${relative(process.cwd(), file)}; waiting for ${t.doc.data.waiting_for}`);
+  log("Now write the reply in that file (one section per point). `collab check` fails while it still holds the template.");
 }
 
 export function cmdConclude(ctx: Ctx, pos: string[]) {

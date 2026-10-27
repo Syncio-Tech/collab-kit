@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2 - 2026-10-27
+- New rules `turn-unfilled` and `ticket-unfilled`: `check` (and therefore `submit` and CI) fails when a turn still
+  holds the template text, or a ticket's Problem / Evidence section is empty. Found in a real run: an agent created
+  three turns with `collab reply`, never wrote them, and reported them as answered.
+- `reply` now says the file must be written before submitting.
+
 ## 0.1.1 - 2026-10-27
 - Fix: `mixed-pr` fired on the `collab init` PR. It now applies only to PRs that change a ticket folder
   (`conversation/SYNC-nnn/`); setup and rule changes may touch other files.
