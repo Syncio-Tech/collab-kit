@@ -311,7 +311,7 @@ test("0.3: upgrade repins the workflow, refreshes rules, adds config keys, never
   const ticketBefore = readFileSync(join(repo, "conversation", tid, "ticket.md"), "utf8");
   const out = ok(repo, "upgrade", "--spec-github", "alice");
   assert.match(out, /workflow|repinned/); assert.match(out, /config keys/); assert.match(out, /rules block/);
-  assert.match(readFileSync(wf, "utf8"), /collabkit-cli@0\.3\.0/);
+  assert.match(readFileSync(wf, "utf8"), new RegExp(`collabkit-cli@${JSON.parse(readFileSync(join(dirname(CLI), "..", "package.json"), "utf8")).version.replace(/\./g, "\\.")}`));
   assert.match(readFileSync(wf, "utf8"), /COLLAB_ACTOR/);              // full refresh, not just a repin
   const cfg = readFileSync(cf, "utf8");
   assert.match(cfg, /max_turns_per_ticket: 6/); assert.match(cfg, /github: alice/); assert.match(cfg, /# collabkit config/);
@@ -357,4 +357,131 @@ test("0.3.1: ship refuses non-ticket changes instead of committing half of them"
   gitc(repo, "checkout", "--", "AGENTS.md");
   r = ck(repo, "ship");
   assert.notEqual(r.code, 0); assert.match(r.out, /no ticket changed/);
+});
+
+// ---------------------------------------------------------------- 0.4 semi-auto
+const ckE = (cwd, env, ...args) => {
+  const r = spawnSync("node", [CLI, ...args], { cwd, encoding: "utf8", env: { ...process.env, ...env } });
+  return { code: r.status, out: r.stdout + r.stderr };
+};
+const okE = (cwd, env, ...args) => { const r = ckE(cwd, env, ...args); assert.equal(r.code, 0, r.out); return r.out; };
+const sigFile = (repo, path, ref = "origin/collab/signals") => {
+  gitc(repo, "fetch", "-q", "origin", "+refs/heads/collab/signals:refs/remotes/origin/collab/signals");
+  return JSON.parse(gitc(repo, "show", `${ref}:${path}`));
+};
+const FAKE_AGENT = `
+import { execFileSync } from "node:child_process";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+execFileSync("collab", ["reply", "SYNC-001", "--points", "P1"], { stdio: "inherit" });
+const d = "conversation/SYNC-001";
+const f = d + "/" + readdirSync(d).filter((n) => /^\\d\\d-/.test(n) && n !== "99-conclusion.md").sort().at(-1);
+writeFileSync(f, readFileSync(f, "utf8").replace(/<name>/g, "scope").replace("- agree | disagree | need data", "- disagree").replace("- reason + evidence", "- evidence: log of 2026-10-27"));
+if (process.env.FAKE_EVIL) writeFileSync("README.md", "pwned\\n");
+`;
+
+function autoSetup({ autonomy = "semi", level = "T1" } = {}) {
+  const env = setup();
+  const { T, specA, code, specB } = env;
+  const cf = join(specA, "conversation/config.yml");
+  writeFileSync(cf, readFileSync(cf, "utf8").replace(/^autonomy: .*$/m, `autonomy: ${autonomy}`));
+  gitc(specA, "commit", "-qam", "autonomy", "--allow-empty"); gitc(specA, "push", "-q", "origin", "main");
+  gitc(specB, "pull", "-q", "origin", "main");
+  ok(code, "open", "--title", "Gate G3 cannot be measured", "--level", level, "--reason", "r",
+     "--requirement", "human-a, kickoff", "--spec-ref", "spec/GATE.md#GATE-003 @ v0.1.0");
+  fillTicket(join(specB, "conversation/SYNC-001/ticket.md")); ok(code, "index");
+  const branch = /pushed (\S+)/.exec(ok(code, "ship", "1"))[1];
+  mergeOnRemote(env, specA, branch);
+  const H = { COLLAB_HOME: join(T, "home") };
+  writeFileSync(join(T, "agent.mjs"), FAKE_AGENT);
+  return { ...env, H };
+}
+const setAgent = (H, cmd) => {
+  const p = join(H.COLLAB_HOME, "auto.json");
+  const c = JSON.parse(readFileSync(p, "utf8"));
+  for (const w of c.workspaces) w.agent = cmd;
+  writeFileSync(p, JSON.stringify(c));
+};
+
+test("0.4: semi-auto runner replies in its own clone, pushes a conv/auto branch, writes heartbeat + ack", () => {
+  const { T, specA, H } = autoSetup();
+  const out = okE(specA, H, "auto", "register");
+  assert.match(out, /registered demo-agent-a/);
+  setAgent(H, ["node", join(T, "agent.mjs")]);
+  const before = gitc(specA, "status", "--porcelain");
+  const run = okE(specA, H, "auto", "now");
+  assert.match(run, /calling agent for SYNC-001/);
+  assert.match(run, /pushed conv\/auto-SYNC-001-agent-a-\d+/);
+  assert.equal(gitc(specA, "status", "--porcelain"), before);           // the user's folder was not touched
+  const br = gitc(specA, "ls-remote", "origin", "refs/heads/conv/auto-*");
+  gitc(specA, "fetch", "-q", "origin");
+  const files = gitc(specA, "diff", "--name-only", "origin/main", br.split(/\s/)[0]).trim().split("\n");
+  assert.ok(files.every((f) => f.startsWith("conversation/")), files.join());
+  assert.equal(sigFile(specA, "heartbeat/agent-a.json").id, "agent-a");
+  assert.match(gitc(specA, "show", "origin/collab/signals:.github/workflows/collabkit-signals.yml"), /collab notify/); // or GitHub would not run it
+  assert.equal(sigFile(specA, "ack/SYNC-001.json")["agent-a"].turns, 0);
+  // inside the 15-minute cycle a scheduled tick does nothing; `now` restarts the cycle
+  assert.equal(okE(specA, H, "auto", "run").trim(), "");
+  // the branch is not merged yet: the next run must not call the agent a second time
+  assert.match(okE(specA, H, "auto", "now"), /waiting for CI to merge conv\/auto-SYNC-001-agent-a/);
+});
+
+test("0.4: agent changes outside conversation/ are thrown away", () => {
+  const { T, specA, H } = autoSetup();
+  okE(specA, H, "auto", "register");
+  setAgent(H, ["node", join(T, "agent.mjs")]);
+  const run = okE(specA, { ...H, FAKE_EVIL: "1" }, "auto", "now");
+  assert.match(run, /discarded agent changes: files outside conversation\/: README.md/);
+  assert.equal(gitc(specA, "ls-remote", "origin", "refs/heads/conv/auto-*").trim(), "");
+});
+
+test("0.4: autonomy manual never calls the agent; reminders fire once per wait; notify and status", () => {
+  const { T, specA, code, H } = autoSetup({ autonomy: "manual", level: "T3" });
+  okE(specA, H, "auto", "register");
+  okE(code, H, "auto", "register");                                     // agent-b on the same machine, second workspace
+  setAgent(H, ["node", "-e", "require('fs').writeFileSync(process.env.COLLAB_HOME + '/called', '1')"]);
+  const later = new Date(Date.now() + 3 * 36e5).toISOString();         // T3 reminds after 2h
+  const run = okE(specA, { ...H, COLLAB_NOW: later }, "auto", "now");
+  assert.match(run, /autonomy is manual, agent not called/);
+  assert.ok(!existsSync(join(H.COLLAB_HOME, "called")));
+  const rem = sigFile(specA, "remind/SYNC-001.json");
+  assert.equal(rem.waiting_for, "agent-a"); assert.equal(rem.reminded.length, 1);
+  // both runners wrote their heartbeat to the one branch
+  assert.equal(sigFile(specA, "heartbeat/agent-b.json").id, "agent-b");
+  const tip1 = gitc(specA, "rev-parse", "origin/collab/signals").trim();
+  okE(specA, { ...H, COLLAB_NOW: new Date(Date.now() + 4 * 36e5).toISOString() }, "auto", "now");
+  assert.equal(sigFile(specA, "remind/SYNC-001.json").reminded.length, 1); // same wait -> no second reminder
+  const n = okE(specA, {}, "notify", "--after", tip1, "--dry-run");
+  assert.match(n, /would comment on \[collab\] SYNC-001: .*waiting on \*\*agent-a\*\*/);
+  assert.match(okE(specA, H, "notify", "--before", tip1, "--after", "origin/collab/signals", "--dry-run"), /no new reminders/);
+  const st = okE(specA, { ...H, COLLAB_NOW: later }, "status");
+  assert.match(st, /autonomy: manual/);
+  assert.match(st, /agent-a\s+last check/);
+  assert.match(st, /SYNC-001\s+T3\s+discussing|SYNC-001\s+T3\s+open/);
+  assert.match(st, /reminded/);
+});
+
+test("0.4: notify rejects a reminder written under another party's login", () => {
+  const { specA, H } = autoSetup({ autonomy: "manual", level: "T3" });
+  const cf = join(specA, "conversation/config.yml");
+  writeFileSync(cf, readFileSync(cf, "utf8").replace(/(spec-owner:[\s\S]*?github: )\S+/, "$1alice"));
+  gitc(specA, "commit", "-qam", "gh"); gitc(specA, "push", "-q", "origin", "main");
+  okE(specA, H, "auto", "register");
+  okE(specA, { ...H, COLLAB_NOW: new Date(Date.now() + 3 * 36e5).toISOString() }, "auto", "now");
+  gitc(specA, "fetch", "-q", "origin", "+refs/heads/collab/signals:refs/remotes/origin/collab/signals");
+  const r = ckE(specA, {}, "notify", "--after", "origin/collab/signals", "--actor", "mallory", "--dry-run");
+  assert.notEqual(r.code, 0); assert.match(r.out, /only @alice may/);
+  assert.match(okE(specA, {}, "notify", "--after", "origin/collab/signals", "--actor", "alice", "--dry-run"), /would comment .*@alice/);
+});
+
+test("0.4: config rejects full auto; init ships the automerge + signals workflows; install --print", () => {
+  const { specA, H } = autoSetup({ autonomy: "manual" });
+  for (const w of ["collabkit-automerge.yml", "collabkit-signals.yml"]) assert.ok(existsSync(join(specA, ".github/workflows", w)), w);
+  assert.match(readFileSync(join(specA, ".github/workflows/collabkit-automerge.yml"), "utf8"), /autonomy:\[\[:space:\]\]\*semi/);
+  const cf = join(specA, "conversation/config.yml");
+  writeFileSync(cf, readFileSync(cf, "utf8").replace(/^autonomy: .*$/m, "autonomy: auto"));
+  const r = ck(specA, "inbox");
+  assert.notEqual(r.code, 0); assert.match(r.out, /Full auto is not supported/);
+  gitc(specA, "checkout", "--", "conversation/config.yml");
+  const p = okE(specA, H, "auto", "install", "--print");
+  assert.match(p, /auto run|<key>StartInterval<\/key><integer>60<\/integer>/);
 });

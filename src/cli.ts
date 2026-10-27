@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import * as C from "./commands.js";
+import * as A from "./auto.js";
 import { loadCtx } from "./core/context.js";
 import { CliError, VERSION } from "./core/util.js";
 
@@ -20,6 +21,12 @@ Ticket work (IDs can be short: 4 = SYNC-004)
 
 Look
   collab next | inbox [--all] | whoami | check [--pr --base REF --actor LOGIN] | index
+
+Semi-auto (on your machine; decisions, spec and code stay human)
+  collab auto register              in a spec or linked repo: let the runner act for this agent
+  collab auto install               every 15 min via launchd (low priority, own clone of the spec repo)
+  collab auto now                   run once now and restart the 15-minute cycle
+  collab status                     runners last seen, who each ticket waits on, seen/reminded
 
 Setup and maintenance
   collab init [--project N] [--integration generic,claude] [--spec-github LOGIN --impl-github LOGIN] ...
@@ -49,19 +56,31 @@ function main(): number {
   const { cmd, pos, flags } = parseArgs(process.argv.slice(2));
   const cwd = typeof flags.cwd === "string" ? flags.cwd : process.cwd();
   const as = typeof flags.as === "string" ? flags.as : undefined;
+  if (flags.help === true && !cmd) { process.stdout.write(HELP); return 0; }
   switch (cmd) {
     case "help": case "--help": case "-h": process.stdout.write(HELP); return 0;
     case "version": case "--version": process.stdout.write(VERSION + "\n"); return 0;
     case "init": C.cmdInit(cwd, flags); return 0;
     case "link": C.cmdLink(cwd, pos, flags); return 0;
     case "upgrade": C.cmdUpgrade(cwd, flags); return 0;
+    case "auto": {
+      const sub = pos[0] ?? "run";
+      if (sub === "run") { A.cmdAutoRun(flags); return 0; }
+      if (sub === "now") { A.cmdAutoRun({ ...flags, now: true }); return 0; }
+      if (sub === "install") { A.cmdAutoInstall(flags); return 0; }
+      if (sub === "uninstall") { A.cmdAutoUninstall(); return 0; }
+      if (sub === "register") { A.cmdAutoRegister(cwd, flags); return 0; }
+      throw new CliError("collab auto register | install | now | run | uninstall");
+    }
   }
-  const ctx = loadCtx(cwd, as, !["index", "check", "sync"].includes(cmd ?? "next"));
+  const ctx = loadCtx(cwd, as, !["index", "check", "sync", "status", "notify"].includes(cmd ?? "next"));
   switch (cmd ?? "next") {
     case "whoami": C.cmdWhoami(ctx); return 0;
     case "inbox": C.cmdInbox(ctx, flags); return 0;
     case "next": case "n": C.cmdNext(ctx, flags); return 0;
     case "sync": C.cmdSync(ctx); return 0;
+    case "status": A.cmdStatus(ctx); return 0;
+    case "notify": return A.cmdNotify(ctx, flags);
     case "ship": C.cmdSubmit(ctx, pos, { ...flags, ship: true }); return 0;
     case "open": C.cmdOpen(ctx, flags); return 0;
     case "reply": C.cmdReply(ctx, pos, flags); return 0;

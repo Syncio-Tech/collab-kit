@@ -1,0 +1,21 @@
+# managed by collabkit {{version}} - `collab upgrade` rewrites this file
+# Reminders on the collab/signals branch become a comment that @mentions the person a ticket waits on.
+# GitHub sends the email (their normal notification settings). No other service, no cost.
+name: collab signals
+on:
+  push:
+    branches: ["collab/signals"]
+permissions:
+  contents: read
+  issues: write
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: collab notify
+        env: { GH_TOKEN: "${{ github.token }}", COLLAB_ACTOR: "${{ github.actor }}" }
+        run: npx --yes -p collabkit-cli@{{version}} collab notify --before "${{ github.event.before }}" --after "${{ github.sha }}" --actor "$COLLAB_ACTOR"

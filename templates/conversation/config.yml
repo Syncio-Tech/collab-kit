@@ -29,6 +29,13 @@ max_turns_per_ticket: 6       # then conclude and let the human decide
 max_points_per_ticket: 5      # a new topic is a new ticket
 max_new_tickets_per_week: 5
 
+# manual: humans run every step.  semi: `collab auto` on a party's machine may call that party's agent for
+# conversation steps (reply, conclude, sign) and push them; CI merges them when check passes.
+# Decisions, spec changes and code are always human. There is no full auto.
+autonomy: manual
+# reminders (email via GitHub) when a ticket waits on someone longer than this
+remind_after_hours: { T3: 2, T2: 24, T1: 72, T0: 72 }
+
 # regexes that must never appear in the conversation, e.g. another tracker's ids
 forbidden_patterns: []
 # optional allowed values for the `area` field
