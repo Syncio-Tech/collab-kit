@@ -362,7 +362,13 @@ export function cmdSubmit(ctx: Ctx, pos: string[], f: Flags) {
   ];
   const mode: Mode = ctx.cfg.parties[m.role].mode;
   const ship = f.ship === true;
-  if (outside.length) log(`note: changes outside ${ctx.cfg.folder}/ are left out of this commit:\n  ${outside.join("\n  ")}`);
+  // ship/submit carry ticket work only. Tool upgrades, spec edits and code are committed by hand, under the
+  // human's name - never half-committed under an agent's name (seen after `collab upgrade` in 0.3.0).
+  if (outside.length)
+    throw new CliError(`not a ticket change: ${outside.length} file(s) outside ${ctx.cfg.folder}/:\n  ${outside.join("\n  ")}\n` +
+      `Commit those by hand on their own branch (e.g. after \`collab upgrade\`), or set them aside (git stash) and ship again.`);
+  if (!touched.length)
+    throw new CliError(`no ticket changed: only ${conv.map((c) => c.path).join(", ")}. Rule, config or template changes are not shipped by collab: commit them by hand.`);
   if (f["dry-run"] === true) { log("dry run - would run:\n"); for (const s of steps) log("  " + s); return; }
   if (!ship && m.kind === "agent" && mode === "human_commit") {
     log(`Ready. ${m.id} is in human_commit mode: ${ctx.cfg.parties[m.role].human}, run this in your terminal:\n`);

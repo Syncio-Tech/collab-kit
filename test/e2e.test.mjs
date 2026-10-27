@@ -345,3 +345,16 @@ test("0.3: sync and short ids", () => {
   assert.match(ok(specA, "reply", "1", "--points", "P1", "--as", "agent-b"), /turn 01/);
   assert.match(ok(specA), /SYNC-001/);                          // bare `collab` = next
 });
+
+test("0.3.1: ship refuses non-ticket changes instead of committing half of them", () => {
+  const repo = soloRepo();
+  gitc(repo, "add", "-A"); gitc(repo, "commit", "-qm", "init");
+  writeFileSync(join(repo, "AGENTS.md"), readFileSync(join(repo, "AGENTS.md"), "utf8") + "\nlocal note\n");
+  const cf = join(repo, "conversation/config.yml");
+  writeFileSync(cf, readFileSync(cf, "utf8").replace("max_turns_per_ticket: 6", "max_turns_per_ticket: 7"));
+  let r = ck(repo, "ship");
+  assert.notEqual(r.code, 0); assert.match(r.out, /not a ticket change/);
+  gitc(repo, "checkout", "--", "AGENTS.md");
+  r = ck(repo, "ship");
+  assert.notEqual(r.code, 0); assert.match(r.out, /no ticket changed/);
+});
