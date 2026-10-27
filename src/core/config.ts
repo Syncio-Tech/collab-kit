@@ -21,6 +21,9 @@ export interface Config {
   max_new_tickets_per_week: number;
   forbidden_patterns: string[];
   areas: string[];
+  /** manual (default) | semi: runners may call agents for conversation steps. There is no "auto". */
+  autonomy: "manual" | "semi";
+  remind_after_hours: Record<string, number>;
 }
 
 export const CONFIG_REL = "conversation/config.yml";
@@ -43,7 +46,11 @@ export function loadConfig(specRoot: string): Config {
     max_new_tickets_per_week: raw.max_new_tickets_per_week ?? 5,
     forbidden_patterns: raw.forbidden_patterns ?? [],
     areas: raw.areas ?? [],
+    autonomy: raw.autonomy === "semi" ? "semi" : "manual",
+    remind_after_hours: { T0: 72, T1: 72, T2: 24, T3: 2, ...(raw.remind_after_hours ?? {}) },
   };
+  if (raw.autonomy !== undefined && !["manual", "semi"].includes(raw.autonomy))
+    throw new CliError(`config: autonomy must be manual | semi (got "${raw.autonomy}"). Full auto is not supported.`);
   for (const r of ["spec-owner", "implementer"] as Role[]) {
     const p = cfg.parties?.[r];
     if (!p?.agent || !p?.human) throw new CliError(`config: parties.${r}.agent and .human are required`);

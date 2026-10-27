@@ -76,7 +76,7 @@ export function cmdInit(cwd: string, f: Flags) {
   writeIfAbsent(join(conv, "README.md"), fill(readText(templatePath("conversation", "README.md")), v), force, written, skipped);
   for (const n of ["ticket.md", "turn.md", "conclusion.md"])
     writeIfAbsent(join(conv, "_templates", n), readText(templatePath("conversation", "_templates", n)), force, written, skipped);
-  writeIfAbsent(join(root, ".github", "workflows", "collabkit-check.yml"), fill(readText(templatePath("github", "collabkit-check.yml")), v), force, written, skipped);
+  for (const w of WORKFLOWS) writeIfAbsent(join(root, ".github", "workflows", w), fill(readText(templatePath("github", w)), v), force, written, skipped);
   const co = join(root, ".github", "CODEOWNERS");
   const snippet = fill(readText(templatePath("github", "CODEOWNERS.snippet")), v);
   if (exists(co)) { writeText(join(root, ".github", "CODEOWNERS.collabkit"), snippet); written.push(join(root, ".github", "CODEOWNERS.collabkit") + "  (merge into your CODEOWNERS)"); }
@@ -96,6 +96,8 @@ export function cmdInit(cwd: string, f: Flags) {
   if (v.spec_human_gh === "CHANGE-ME") log("\nnote: pass --spec-github/--impl-github (or edit parties.*.github in config.yml) so CI can verify who pushed what.");
   log(`\nNext: replace GitHub handles in .github/CODEOWNERS, protect the default branch (require PR + code owner review),\ninvite the implementer, then commit these files.`);
 }
+
+const WORKFLOWS = ["collabkit-check.yml", "collabkit-automerge.yml", "collabkit-signals.yml"];
 
 function writeManifest(root: string, files: string[]) {
   const m: Record<string, string> = {};
@@ -362,7 +364,13 @@ export function cmdSubmit(ctx: Ctx, pos: string[], f: Flags) {
   ];
   const mode: Mode = ctx.cfg.parties[m.role].mode;
   const ship = f.ship === true;
-  if (outside.length) log(`note: changes outside ${ctx.cfg.folder}/ are left out of this commit:\n  ${outside.join("\n  ")}`);
+  // ship/submit carry ticket work only. Tool upgrades, spec edits and code are committed by hand, under the
+  // human's name - never half-committed under an agent's name (seen after `collab upgrade` in 0.3.0).
+  if (outside.length)
+    throw new CliError(`not a ticket change: ${outside.length} file(s) outside ${ctx.cfg.folder}/:\n  ${outside.join("\n  ")}\n` +
+      `Commit those by hand on their own branch (e.g. after \`collab upgrade\`), or set them aside (git stash) and ship again.`);
+  if (!touched.length)
+    throw new CliError(`no ticket changed: only ${conv.map((c) => c.path).join(", ")}. Rule, config or template changes are not shipped by collab: commit them by hand.`);
   if (f["dry-run"] === true) { log("dry run - would run:\n"); for (const s of steps) log("  " + s); return; }
   if (!ship && m.kind === "agent" && mode === "human_commit") {
     log(`Ready. ${m.id} is in human_commit mode: ${ctx.cfg.parties[m.role].human}, run this in your terminal:\n`);
@@ -455,16 +463,18 @@ export function cmdUpgrade(cwd: string, f: Flags) {
   const isSpecSide = specRoot === workRoot;
   if (isSpecSide) {
     const manifest = exists(join(specRoot, ".collabkit/manifest.json")) ? JSON.parse(readText(join(specRoot, ".collabkit/manifest.json"))).files ?? {} : {};
-    // workflow: repin
-    const wf = join(specRoot, ".github/workflows/collabkit-check.yml");
-    if (exists(wf)) {
+    // workflows: add new ones, replace untouched ones, repin edited ones
+    for (const w of WORKFLOWS) {
+      const rel = `.github/workflows/${w}`;
+      const wf = join(specRoot, rel);
+      const fresh = fill(readText(templatePath("github", w)), { version: VERSION });
+      if (!exists(wf)) { write(wf, fresh, "added"); continue; }
       const cur = readText(wf);
-      const fresh = fill(readText(templatePath("github", "collabkit-check.yml")), { version: VERSION });
       // "untouched" = equal to a shipped template once version pins are ignored (users repin by hand)
       const norm = (x: string) => x.replace(/collabkit(-cli@| )\d+\.\d+\.\d+/g, "collabkit$1X").trim();
-      const shipped = [readText(templatePath("github", "collabkit-check.yml")), readText(templatePath("github", "legacy", "collabkit-check.v0.yml"))];
+      const shipped = [readText(templatePath("github", w)), ...(w === "collabkit-check.yml" ? [readText(templatePath("github", "legacy", "collabkit-check.v0.yml"))] : [])];
       const pristine = shipped.some((t) => norm(t.replace(/\{\{version\}\}/g, "0.0.0")) === norm(cur));
-      const edited = !pristine && manifest[".github/workflows/collabkit-check.yml"] && sha256(cur) !== manifest[".github/workflows/collabkit-check.yml"];
+      const edited = !pristine && manifest[rel] && sha256(cur) !== manifest[rel];
       if (!edited || force) write(wf, fresh, "workflow -> " + VERSION);
       else { const repinned = cur.replace(/collabkit-cli@\d+\.\d+\.\d+/g, `collabkit-cli@${VERSION}`); write(wf, repinned, "repinned to " + VERSION + " (file was edited by hand; kept the rest)"); }
     }
@@ -493,7 +503,7 @@ export function cmdUpgrade(cwd: string, f: Flags) {
     // config: add keys introduced since the repo was set up, keep comments
     const cp = join(specRoot, CONFIG_REL);
     const doc = YAML.parseDocument(readText(cp));
-    const defaults: Record<string, any> = { max_turns_per_ticket: 6, max_points_per_ticket: 5 };
+    const defaults: Record<string, any> = { max_turns_per_ticket: 6, max_points_per_ticket: 5, autonomy: "manual" };
     for (const [k, v] of Object.entries(defaults)) if (!doc.has(k)) doc.set(k, v);
     for (const r of ["spec-owner", "implementer"]) if (!doc.hasIn(["parties", r, "github"])) doc.setIn(["parties", r, "github"], f[`${r === "spec-owner" ? "spec" : "impl"}-github`] ?? "CHANGE-ME");
     write(cp, doc.toString(), "config keys");
@@ -513,7 +523,7 @@ export function cmdUpgrade(cwd: string, f: Flags) {
   } else if (present.length) changes.push(`agent files would be refreshed: ${present.join(", ")}`);
   if (isSpecSide && !dry) {
     writeText(indexPath(specRoot, cfg), renderIndex(specRoot, cfg));
-    const files = [".github/workflows/collabkit-check.yml", `${cfg.folder}/README.md`, ...["ticket.md", "turn.md", "conclusion.md"].map((n) => `${cfg.folder}/_templates/${n}`)].map((r) => join(specRoot, r));
+    const files = [...WORKFLOWS.map((w) => `.github/workflows/${w}`), `${cfg.folder}/README.md`, ...["ticket.md", "turn.md", "conclusion.md"].map((n) => `${cfg.folder}/_templates/${n}`)].map((r) => join(specRoot, r));
     writeManifest(specRoot, files);
   }
   log(`collabkit ${VERSION} upgrade${dry ? " (dry run)" : ""}: ${changes.length ? "" : "already up to date"}`);

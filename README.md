@@ -107,6 +107,37 @@ collab inbox
 | `state` | `discussing` (reopen / raise level) · `in-spec --ref TAG` · `conformed --ref TAG` |
 | `index` · `check` · `submit` | regenerate INDEX, validate, ship as PR |
 | `upgrade` | bring workflow, rules, templates and agent files to the installed version |
+| `auto register` · `auto install` · `auto now` | semi-auto runner on your machine (below) |
+| `status` | runners last seen, who each ticket waits on, seen / reminded |
+
+## Semi-auto
+
+The transport runs by itself; **decisions, spec changes and code stay human. There is no full auto.**
+
+1. The spec owner sets `autonomy: semi` in `conversation/config.yml` (default `manual`) and merges it.
+2. Each side, once, from its spec or linked repo:
+   ```sh
+   collab auto register      # the runner acts for this agent, in its own clone (~/.collabkit/work/...)
+   collab auto install       # macOS launchd, every 15 min, low priority; Linux prints a crontab line
+   ```
+3. Every 15 minutes the runner fetches (one cheap `ls-remote` when nothing moved). When a ticket waits on its
+   agent in `open`/`discussing`, it calls the agent headless (`claude -p`, only `collab` conversation commands
+   allowed), keeps the result only if every change is under `conversation/` and `collab check` passes, and pushes
+   `conv/auto-*`. The `collab automerge` workflow checks it again and merges it. Anything else is thrown away.
+4. Everything that needs a person (`agreed` -> decide, `approved` -> spec, `in-spec` -> code) is left alone.
+   When a ticket waits past `remind_after_hours` (T3 2h, T2 24h, T1/T0 72h), the runner writes a reminder and the
+   `collab signals` workflow comments on an issue `[collab] SYNC-nnn`, @mentioning the login it waits on:
+   GitHub emails them. No other service, no cost.
+
+`collab auto now` runs at once and restarts the 15-minute cycle. Limits: one run at a time, 20 agent calls a day,
+10 minutes per call (`~/.collabkit/auto.json`). Your working folders are never touched. Log: `~/.collabkit/auto.log`.
+
+Heartbeats, acks and reminders live on the `collab/signals` branch (JSON, informational only; ticket state stays in
+`conversation/` on main). CI checks each signal was pushed by its party's login.
+
+Repo settings: *Actions -> General -> Allow GitHub Actions to create and approve pull requests*. If branch rules
+require a review, automerge leaves the PR open for a human. With `autonomy: semi`, conversation turns are pushed by
+the runner even for a party in `human_commit` mode; decisions and code are not.
 
 ## Limitations
 

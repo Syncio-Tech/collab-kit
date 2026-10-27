@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.0 - 2026-10-27
+- **Semi-auto** (`autonomy: semi` in config; default `manual`; full auto is refused). The transport runs by
+  itself; decisions, spec changes and code stay human.
+  - `collab auto register | install | now | run | uninstall`: a runner on your machine (launchd on macOS, low
+    priority, every 15 min; `now` runs at once and restarts the cycle). Own clone under `~/.collabkit/work/`, one
+    run at a time, daily agent budget, timeout. Calls the agent headless only for conversation steps; keeps only
+    `conversation/` changes that pass `check`; pushes `conv/auto-*`; never calls again while that branch is open.
+  - Workflow `collab automerge`: checks `conv/auto-*` branches (autonomy read from main, `conversation/` only,
+    `collab check --pr --actor`) and squash-merges them.
+  - Branch `collab/signals`: heartbeat, ack, remind. Concurrent writers merge (retry on race).
+  - Reminders after `remind_after_hours` (T3 2h, T2 24h, T1/T0 72h), once per wait, for whoever the ticket waits
+    on. Workflow `collab signals` + `collab notify` turn them into an issue comment @mentioning that login, so
+    GitHub sends the email. Signals pushed under another party's login are rejected.
+  - `collab status`: runners last seen, tickets waiting, seen / reminded.
+  - `upgrade` adds the two workflows and the `autonomy` key.
+
+## 0.3.1 - 2026-10-27
+- `ship` refuses changes outside `conversation/` (it used to commit the ticket part and leave the rest), and
+  refuses rule/config/template-only changes: commit those by hand.
+
 ## 0.3.0 - 2026-10-27
 - **Identity is verified, not declared.** `parties.<role>.github` in config maps each party to a GitHub login.
   CI runs `collab check --actor <login>`; a new ticket, turn, signature or decision for an id must be pushed by that

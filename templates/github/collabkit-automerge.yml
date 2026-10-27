@@ -1,0 +1,32 @@
+# managed by collabkit {{version}} - `collab upgrade` rewrites this file
+# Semi-auto: a runner (`collab auto`) pushed a conversation-only branch. Check it and merge it.
+# Only when the spec owner set `autonomy: semi` on main. Decisions, spec changes and code never come this way.
+name: collab automerge
+on:
+  push:
+    branches: ["conv/auto-**"]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: autonomy must be semi on main
+        run: git show origin/main:conversation/config.yml | grep -Eq '^autonomy:[[:space:]]*semi\b' || { echo "::error::autonomy is not semi on main - a human must open and merge this PR"; exit 1; }
+      - name: conversation/ only
+        run: |
+          out=$(git diff --name-only origin/main...HEAD | grep -v '^conversation/' || true)
+          if [ -n "$out" ]; then echo "::error::files outside conversation/:"; echo "$out"; exit 1; fi
+      - name: collab check
+        env: { COLLAB_ACTOR: "${{ github.actor }}" }
+        run: npx --yes -p collabkit-cli@{{version}} collab check --pr --base origin/main --actor "$COLLAB_ACTOR"
+      - name: open and merge
+        env: { GH_TOKEN: "${{ github.token }}", BRANCH: "${{ github.ref_name }}" }
+        run: |
+          gh pr view "$BRANCH" --json number >/dev/null 2>&1 || gh pr create --head "$BRANCH" --base main --title "$(git log -1 --format=%s)" --body "Semi-auto conversation turn, checked by collab check. Pushed by @${{ github.actor }}."
+          gh pr merge "$BRANCH" --squash --delete-branch || echo "::warning::could not merge (branch rules may need a review) - the PR stays open for a human"
