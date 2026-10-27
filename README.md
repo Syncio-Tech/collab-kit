@@ -94,6 +94,16 @@ collab inbox
 | `state` | `discussing` (reopen / raise level) · `in-spec --ref TAG` · `conformed --ref TAG` |
 | `index` · `check` · `submit` | regenerate INDEX, validate, ship as PR |
 
+## Limitations
+
+- **Rulesets on private repos need a paid GitHub plan.** On GitHub Free, branch protection / rulesets are not
+  enforced for private repositories. `collab check` still runs in CI and goes red, and `human_commit` mode keeps
+  agents from pushing, but nothing stops a human with write access from merging a red PR.
+- **Agent quality is not enforced, only structure.** `check` catches unfilled templates, lowered levels, edited
+  turns, stale signatures; it cannot tell a sourced claim from an invented one. Review conclusions before signing
+  and deciding.
+- One spec repo per project; read access is per repository (`read_scope: mirror` is planned).
+
 ## Roadmap
 
 - v0.2: `upgrade` (manifest-based, never touches project content), `migrate`, integrations for Cursor, Copilot, Codex; Vietnamese preset.

@@ -23,6 +23,8 @@ parties:
 read_scope: all
 
 max_turns_per_point: 2
+max_turns_per_ticket: 6       # then conclude and let the human decide
+max_points_per_ticket: 5      # a new topic is a new ticket
 max_new_tickets_per_week: 5
 
 # regexes that must never appear in the conversation, e.g. another tracker's ids

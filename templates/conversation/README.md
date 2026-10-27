@@ -48,8 +48,12 @@ conversation/
 
 1. The opener sets the level and a one-line reason (`level_reason`).
 2. An agent may only **raise** a level. Lowering needs a human (`level_override_by`).
-3. At most `max_turns_per_point` turns per point per agent. Still disagreeing → T2, and the
-   options go into the conclusion.
+3. At most `max_turns_per_point` turns per point per agent, `max_turns_per_ticket` turns and
+   `max_points_per_ticket` points per ticket. Still disagreeing → T2, and the options go into the conclusion.
+   A new topic is a new ticket, not a new point.
+4a. When the other side agrees on every point, do not reply: `collab conclude`, write it, `collab sign`.
+4b. A signature covers the conclusion text. Changing the text after someone signed voids their signature.
+4c. A spec change is always decided by the spec owner's human, whatever the level.
 4. Any ticket saying the code differs from the spec is T2 or higher.
 5. Every ticket points to an original requirement. None → `requirement: NO_REQUIREMENT`, state `parked`.
 6. Do not concede to close faster: open disagreements become options for the human, with trade-offs.

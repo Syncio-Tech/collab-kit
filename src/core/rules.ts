@@ -3,7 +3,7 @@ import { Config, allIds, identify } from "./config.js";
 import { parse } from "./frontmatter.js";
 import { changedSince, hasRef, isRepo, showAt } from "./git.js";
 import { renderIndex, indexPath } from "./indexmd.js";
-import { CONCLUSION, LEVELS, NO_REQUIREMENT, STATES, State, Ticket, TURN_RE, levelIdx, listTickets, rel } from "./ticket.js";
+import { CONCLUSION, LEVELS, NO_REQUIREMENT, STATES, State, Ticket, TURN_RE, conclusionHash, levelIdx, listTickets, readSig, rel, stances } from "./ticket.js";
 import { exists, readText } from "./util.js";
 
 export interface Diag { severity: "error" | "warn"; code: string; file: string; msg: string; }
@@ -90,6 +90,32 @@ export function check(root: string, cfg: Config, opts: CheckOpts = {}): Diag[] {
       }
     }
 
+    // signatures are bound to the conclusion text
+    if (t.conclusion) {
+      const cf = rel(root, t.conclusionFile);
+      const h = conclusionHash(t.conclusion.body);
+      for (const [who, v] of Object.entries(t.conclusion.data.signatures ?? {})) {
+        const s = readSig(v);
+        if (!s) continue;
+        if (s.legacy) { if (["discussing", "agreed"].includes(d.state)) warn("signature-legacy", cf, `${who} signed before collabkit 0.2 (no content hash); re-sign to bind the signature to the text`); }
+        else if (s.sha256 !== h) err("signature-stale", cf, `the conclusion changed after ${who} signed; ${who} must read it again and \`collab sign ${t.id}\``);
+      }
+    }
+
+    // a spec change is always decided by the spec owner's human, whatever the level
+    if ((d.state === "in-spec" || d.spec_change_ref) && d.decision?.by && d.decision.by !== cfg.parties["spec-owner"].human)
+      err("spec-change-decider", f, `the spec changes only on a decision by ${cfg.parties["spec-owner"].human} (decided by ${d.decision.by})`);
+
+    // caps: stop endless back-and-forth and point-splitting
+    const points = new Set(t.turns.flatMap((x) => x.doc.data.points ?? []));
+    if (t.turns.length > cfg.max_turns_per_ticket) err("turn-cap", f, `${t.turns.length} turns (max ${cfg.max_turns_per_ticket}): conclude, or escalate and let the human decide`);
+    if (points.size > cfg.max_points_per_ticket) err("point-cap", f, `${points.size} points (max ${cfg.max_points_per_ticket}): split into another ticket instead of adding points`);
+    const last = t.turns.at(-1);
+    if (last && d.state === "discussing" && !t.conclusion) {
+      const st = Object.values(stances(last.doc.body));
+      if (st.length && st.every((x) => x === "agree")) warn("should-conclude", rel(root, last.file), "every point is agreed: run `collab conclude`, do not reply again");
+    }
+
     // turns
     let expect = 1;
     const perPoint: Record<string, Record<string, number>> = {};
@@ -109,6 +135,20 @@ export function check(root: string, cfg: Config, opts: CheckOpts = {}): Diag[] {
       const agents = [cfg.parties["spec-owner"].agent, cfg.parties["implementer"].agent];
       const exhausted = agents.every((a) => (by[a] ?? 0) >= cfg.max_turns_per_point);
       if (exhausted && d.state === "discussing" && levelIdx(d.level) < 2) err("escalate", f, `point ${p} used ${cfg.max_turns_per_point} turns on each side without agreement: raise level to T2`);
+    }
+
+    // unfilled templates: a turn or ticket that still carries the template text says nothing
+    const meaningful = (body: string) => body.split("\n").map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("#") && !l.startsWith("<!--")).length;
+    for (const turn of t.turns) {
+      const tf = rel(root, turn.file);
+      const b = turn.doc.body;
+      if (/<name>|^- agree \| disagree \| need data$|^- reason \+ evidence$/m.test(b) || meaningful(b) === 0)
+        err("turn-unfilled", tf, "turn still contains the template; write the reply for each point before submitting");
+    }
+    for (const sec of ["Problem", "Evidence"]) {
+      const m = new RegExp(`^## ${sec}[^\\n]*\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, "m").exec(t.doc.body);
+      if (m && meaningful(m[1]) === 0) err("ticket-unfilled", f, `section "${sec}" is empty`);
     }
 
     // content scans
