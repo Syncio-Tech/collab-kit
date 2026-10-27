@@ -9,7 +9,7 @@ import { changedSince, git, hasCommand, isRepo } from "./core/git.js";
 import { indexPath, renderIndex } from "./core/indexmd.js";
 import { INTEGRATIONS, installIntegrations } from "./core/integrations.js";
 import { check, formatDiags, TRANSITIONS } from "./core/rules.js";
-import { CONCLUSION, LEVELS, NO_REQUIREMENT, STATES, State, Ticket, convDir, levelIdx, listTickets, loadTicket, nextId, rel } from "./core/ticket.js";
+import { CONCLUSION, LEVELS, NO_REQUIREMENT, STATES, State, Ticket, conclusionHash, convDir, levelIdx, listTickets, loadTicket, nextId, readSig, rel, stances } from "./core/ticket.js";
 import { CliError, VERSION, exists, fill, nowIso, readText, sha256, templatePath, writeText } from "./core/util.js";
 
 export type Flags = Record<string, string | boolean>;
@@ -120,8 +120,22 @@ export function cmdWhoami(ctx: Ctx) {
   if (ctx.workRoot !== ctx.specRoot) log(`work repo: ${ctx.workRoot}`);
 }
 
+/** Warn when the spec repo is on a stale branch or behind its upstream: the most common human slip. */
+function freshness(root: string): string[] {
+  if (!isRepo(root)) return [];
+  const out: string[] = [];
+  const base = git(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], true).replace(/^origin\//, "") || "main";
+  const branch = git(root, ["branch", "--show-current"], true);
+  if (branch && branch !== base) out.push(`spec repo is on branch "${branch}", not "${base}". Before a new turn: git -C ${root} switch ${base} && git -C ${root} pull`);
+  try { execFileSync("git", ["fetch", "--quiet", "origin"], { cwd: root, stdio: "ignore", timeout: 8000 }); } catch { /* offline: use what we know */ }
+  const behind = Number(git(root, ["rev-list", "--count", `HEAD..origin/${base}`], true) || 0);
+  if (behind > 0) out.push(`spec repo is ${behind} commit(s) behind origin/${base}: git -C ${root} pull`);
+  return out;
+}
+
 export function cmdInbox(ctx: Ctx, f: Flags) {
   const m = me(ctx);
+  for (const w of freshness(ctx.specRoot)) log("WARN  " + w);
   const all = f.all === true;
   const ts = listTickets(ctx.specRoot, ctx.cfg).filter((t) => all || t.doc.data.waiting_for === m.id);
   if (!ts.length) { log(all ? "no tickets" : `nothing waiting for ${m.id}`); return; }
@@ -165,6 +179,18 @@ export function cmdReply(ctx: Ctx, pos: string[], f: Flags) {
   const st = t.doc.data.state as State;
   if (["rejected", "conformed"].includes(st)) throw new CliError(`${t.id} is ${st}; reopen with \`collab state ${t.id} discussing\` first`);
   const points = (str(f, "points", "P1")!).split(",").map((s) => s.trim()).filter(Boolean);
+  if (t.turns.length >= ctx.cfg.max_turns_per_ticket)
+    throw new CliError(`${t.id} already has ${t.turns.length} turns (max ${ctx.cfg.max_turns_per_ticket}). Run \`collab conclude ${t.id}\` and record the open points as options for the human.`);
+  const known = new Set(t.turns.flatMap((x) => x.doc.data.points ?? []));
+  for (const p of points) known.add(p);
+  if (known.size > ctx.cfg.max_points_per_ticket)
+    throw new CliError(`${t.id} would have ${known.size} points (max ${ctx.cfg.max_points_per_ticket}). Open a separate ticket for the new topic.`);
+  const lastTurn = t.turns.at(-1);
+  if (lastTurn && lastTurn.by !== m.id) {
+    const st = Object.values(stances(lastTurn.doc.body));
+    if (st.length && st.every((x) => x === "agree"))
+      throw new CliError(`the last turn agrees on every point. Do not reply: \`collab conclude ${t.id}\`, write the conclusion, then \`collab sign ${t.id}\`.`);
+  }
   for (const p of points) {
     const used = t.turns.filter((x) => x.by === m.id && (x.doc.data.points ?? []).includes(p)).length;
     if (used >= ctx.cfg.max_turns_per_point)
@@ -200,9 +226,14 @@ export function cmdSign(ctx: Ctx, pos: string[]) {
   const t = getTicket(ctx, pos[0]);
   if (!exists(t.conclusionFile)) throw new CliError(`no ${CONCLUSION}; run \`collab conclude ${t.id}\``);
   const c = parse(readText(t.conclusionFile));
-  c.data.signatures = { ...(c.data.signatures ?? {}), [m.id]: nowIso() };
+  if (/^## Conclusion\s*\n\s*(## |$)/m.test(c.body)) throw new CliError(`write the conclusion in ${CONCLUSION} before signing`);
+  const h = conclusionHash(c.body);
+  c.data.signatures = { ...(c.data.signatures ?? {}), [m.id]: { at: nowIso(), sha256: h } };
   writeText(t.conclusionFile, stringify(c));
-  const both = [ctx.cfg.parties["spec-owner"].agent, ctx.cfg.parties.implementer.agent].every((a) => c.data.signatures[a]);
+  const valid = (a: string) => { const s = readSig(c.data.signatures[a]); return !!s && !s.legacy && s.sha256 === h; };
+  const stale = Object.keys(c.data.signatures).filter((a) => a !== m.id && !valid(a));
+  const both = [ctx.cfg.parties["spec-owner"].agent, ctx.cfg.parties.implementer.agent].every(valid);
+  if (stale.length) log(`note: the conclusion text differs from what ${stale.join(", ")} signed; they must sign again`);
   if (both) {
     t.doc.data.state = "agreed";
     t.doc.data.waiting_for = decider(ctx.cfg, t.doc.data.level);
@@ -214,18 +245,29 @@ export function cmdSign(ctx: Ctx, pos: string[]) {
 export function cmdDecide(ctx: Ctx, pos: string[], f: Flags) {
   const m = me(ctx);
   if (m.kind !== "human") throw new CliError("only a human decides");
-  const t = getTicket(ctx, pos[0]);
-  const d = t.doc.data;
+  if (!pos.length) throw new CliError('usage: collab decide <ID>[=option] [<ID>[=option] ...] --decision approve|park|reject [--option O] [--note N]');
   const decision = need(f, "decision");
   const map: Record<string, State> = { approve: "approved", park: "parked", reject: "rejected" };
   if (!map[decision]) throw new CliError("--decision approve|park|reject");
-  if (levelIdx(d.level) >= 2 && m.role !== "spec-owner") throw new CliError(`${d.level} is decided by ${ctx.cfg.parties["spec-owner"].human}`);
-  if (!TRANSITIONS[d.state as State].includes(map[decision])) throw new CliError(`cannot ${decision} a ticket in state ${d.state}`);
-  d.decision = { by: m.id, decision, at: nowIso(), ...(str(f, "option") ? { option: str(f, "option") } : {}), ...(str(f, "note") ? { note: str(f, "note") } : {}) };
-  d.state = map[decision];
-  d.waiting_for = decision !== "approve" ? "none" : levelIdx(d.level) >= 2 ? ctx.cfg.parties["spec-owner"].agent : ctx.cfg.parties.implementer.agent;
-  save(ctx, t);
-  log(`${t.id} ${d.state}; waiting for ${d.waiting_for}`);
+  // validate everything first, write nothing on error
+  const items = pos.map((arg) => {
+    const i = arg.indexOf("=");
+    const id = i < 0 ? arg : arg.slice(0, i);
+    const option = i < 0 ? str(f, "option") : arg.slice(i + 1);
+    const t = getTicket(ctx, id);
+    const d = t.doc.data;
+    if (levelIdx(d.level) >= 2 && m.role !== "spec-owner") throw new CliError(`${t.id}: ${d.level} is decided by ${ctx.cfg.parties["spec-owner"].human}`);
+    if (!TRANSITIONS[d.state as State].includes(map[decision])) throw new CliError(`${t.id}: cannot ${decision} a ticket in state ${d.state}`);
+    return { t, option };
+  });
+  for (const { t, option } of items) {
+    const d = t.doc.data;
+    d.decision = { by: m.id, decision, at: nowIso(), ...(option ? { option } : {}), ...(str(f, "note") ? { note: str(f, "note") } : {}) };
+    d.state = map[decision];
+    d.waiting_for = decision !== "approve" ? "none" : levelIdx(d.level) >= 2 || m.role === "spec-owner" ? ctx.cfg.parties["spec-owner"].agent : ctx.cfg.parties.implementer.agent;
+    save(ctx, t);
+    log(`${t.id} ${d.state}${option ? ` (${option})` : ""}; waiting for ${d.waiting_for}`);
+  }
 }
 
 export function cmdState(ctx: Ctx, pos: string[], f: Flags) {
@@ -247,7 +289,12 @@ export function cmdState(ctx: Ctx, pos: string[], f: Flags) {
   if (to !== d.state) {
     if (!TRANSITIONS[d.state as State].includes(to)) throw new CliError(`invalid transition ${d.state} -> ${to}`);
     if (["approved", "parked", "rejected"].includes(to)) throw new CliError("use `collab decide` for approve/park/reject");
-    if (to === "in-spec") { d.spec_change_ref = need(f, "ref"); d.waiting_for = ctx.cfg.parties.implementer.agent; }
+    if (to === "in-spec") {
+      const owner = ctx.cfg.parties["spec-owner"].human;
+      if (d.decision?.by !== owner)
+        throw new CliError(`a spec change needs a decision by ${owner} (now: ${d.decision?.by ?? "none"}). Ask ${owner} to \`collab decide ${t.id} --decision approve\`.`);
+      d.spec_change_ref = need(f, "ref"); d.waiting_for = ctx.cfg.parties.implementer.agent;
+    }
     if (to === "conformed") {
       if (levelIdx(d.level) >= 2 && d.state !== "in-spec" && d.state !== "approved") throw new CliError("T2/T3 must be approved first");
       d.conformed_ref = need(f, "ref"); d.waiting_for = "none";
@@ -283,21 +330,25 @@ export function cmdSubmit(ctx: Ctx, pos: string[], f: Flags) {
   const conv = changed.filter((c) => c.path.startsWith(ctx.cfg.folder + "/"));
   if (!conv.length) throw new CliError("nothing to submit under " + ctx.cfg.folder + "/");
   const outside = changed.filter((c) => !c.path.startsWith(ctx.cfg.folder + "/")).map((c) => `${c.status} ${c.path}`);
-  const guess = conv.map((c) => c.path.split("/")[1]).find((n) => /^[A-Z]+-\d{3,}$/.test(n));
-  const id = (pos[0] ?? guess ?? "conversation").toUpperCase();
-  const t = loadTicket(root, ctx.cfg, id);
+  const touched = [...new Set(conv.map((c) => c.path.split("/")[1]).filter((n) => /^[A-Z]+-\d{3,}$/.test(n)))].sort();
+  const ids = pos.length ? pos.map((p) => p.toUpperCase()) : touched;
+  const label = ids.length === 0 ? "conversation" : ids.length === 1 ? ids[0] : `${ids[0]}..${ids.at(-1)!.split("-").pop()}`;
+  const states = ids.map((id) => `${id} ${loadTicket(root, ctx.cfg, id)?.doc.data.state ?? "?"}`);
   const stamp = nowIso().slice(0, 16).replace(/[-:T]/g, "");
-  const branch = `conv/${id}-${m.id}-${stamp}`;
-  const msg = `collab(${id}): ${t?.doc.data.state ?? "update"} by ${m.id}`;
-  const body = `${t?.doc.data.title ?? ""}\n\nAgent: ${m.id}`;
+  const branch = `conv/${label.replace(/\.\./g, "-")}-${m.id}-${stamp}`;
+  const msg = `collab(${label}): ${states.length === 1 ? states[0].split(" ")[1] : "update"} by ${m.id}`;
+  const body = `${states.join("\n")}\n\nAgent: ${m.id}`;
   const base = git(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], true).replace(/^origin\//, "") || "main";
   const hasRemote = git(root, ["remote"], true).split("\n").includes("origin");
+  const compare = compareUrl(root, base, branch);
   const steps = [
     `git -C ${root} switch -c ${branch}`,
     `git -C ${root} add ${ctx.cfg.folder}`,
     `git -C ${root} commit -m "${msg}" -m "Agent: ${m.id}"`,
     `git -C ${root} push -u origin ${branch}`,
-    `gh pr create --repo "$(git -C ${root} remote get-url origin)" --base ${base} --head ${branch} --title "${msg}" --body "Agent: ${m.id}"`,
+    hasCommand("gh")
+      ? `gh pr create --repo "$(git -C ${root} remote get-url origin)" --base ${base} --head ${branch} --title "${msg}" --body "Agent: ${m.id}"`
+      : `# open the PR in a browser: ${compare ?? `GitHub > New pull request > ${branch} into ${base}`}`,
   ];
   const mode: Mode = ctx.cfg.parties[m.role].mode;
   if (outside.length) log(`note: changes outside ${ctx.cfg.folder}/ are left out of this commit:\n  ${outside.join("\n  ")}`);
@@ -313,9 +364,16 @@ export function cmdSubmit(ctx: Ctx, pos: string[], f: Flags) {
   if (!hasRemote) { log("no `origin` remote: branch kept locally, no PR opened"); return; }
   git(root, ["push", "-u", "origin", branch]);
   log(`pushed ${branch}`);
-  if (!hasCommand("gh")) { log(`gh CLI not found: open a PR from ${branch} into ${base}.`); return; }
+  if (!hasCommand("gh")) { log(`gh CLI not found. Open the PR: ${compare ?? `${branch} into ${base}`}`); return; }
   try {
     const url = execFileSync("gh", ["pr", "create", "--base", base, "--head", branch, "--title", msg, "--body", body], { cwd: root, encoding: "utf8" }).trim();
     log(`PR: ${url}`);
   } catch (e: any) { log(`PR not opened automatically (${(e.stderr ?? e.message).toString().trim()}). Open one from ${branch} into ${base}.`); }
+}
+
+/** https://github.com/<owner>/<repo>/compare/<base>...<branch>?expand=1 for GitHub remotes (https or ssh). */
+function compareUrl(root: string, base: string, branch: string): string | undefined {
+  const url = git(root, ["remote", "get-url", "origin"], true);
+  const m = /github\.com[:/]([^/]+)\/([^/]+?)(\.git)?$/.exec(url);
+  return m ? `https://github.com/${m[1]}/${m[2]}/compare/${base}...${branch}?expand=1` : undefined;
 }

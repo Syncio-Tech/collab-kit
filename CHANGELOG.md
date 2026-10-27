@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.0 - 2026-10-27
+Rules learned from the first real project run (two agents, one human, three tickets end to end).
+- **A spec change is decided by the spec owner's human, whatever the level.** `state in-spec` refuses otherwise;
+  `check` reports `spec-change-decider`. Before, a T0/T1 approved by the implementer's human could change the spec.
+- **Signatures cover the conclusion text.** `sign` stores `{at, sha256}`; editing the conclusion afterwards voids
+  the signature (`signature-stale`), and `agreed` needs both signatures to match the current text. Pre-0.2
+  signatures (bare timestamps) are reported as `signature-legacy` warnings. `sign` refuses an empty conclusion.
+- **No endless back-and-forth.** `max_turns_per_ticket` (6) and `max_points_per_ticket` (5) in config;
+  `reply` refuses past the caps (`turn-cap`, `point-cap`). When the other side's last turn agrees on every point,
+  `reply` refuses and points to `conclude`; `check` warns `should-conclude`.
+- `decide` takes several tickets at once: `collab decide SYNC-001=A SYNC-002="B1+B2" --decision approve`.
+  Validates all before writing any.
+- `inbox` warns when the spec repo is not on the default branch or is behind origin.
+- `submit` names the branch after every ticket it carries (`conv/SYNC-001-003-...`) and prints the GitHub
+  compare link when `gh` is not installed.
+- README: Limitations (GitHub Free does not enforce rulesets on private repos).
+
 ## 0.1.2 - 2026-10-27
 - New rules `turn-unfilled` and `ticket-unfilled`: `check` (and therefore `submit` and CI) fails when a turn still
   holds the template text, or a ticket's Problem / Evidence section is empty. Found in a real run: an agent created

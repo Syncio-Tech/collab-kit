@@ -16,6 +16,8 @@ export interface Config {
   parties: Record<Role, Party>;
   read_scope: "all" | "mirror";
   max_turns_per_point: number;
+  max_turns_per_ticket: number;
+  max_points_per_ticket: number;
   max_new_tickets_per_week: number;
   forbidden_patterns: string[];
   areas: string[];
@@ -36,6 +38,8 @@ export function loadConfig(specRoot: string): Config {
     parties: raw.parties,
     read_scope: raw.read_scope ?? "all",
     max_turns_per_point: raw.max_turns_per_point ?? 2,
+    max_turns_per_ticket: raw.max_turns_per_ticket ?? 6,
+    max_points_per_ticket: raw.max_points_per_ticket ?? 5,
     max_new_tickets_per_week: raw.max_new_tickets_per_week ?? 5,
     forbidden_patterns: raw.forbidden_patterns ?? [],
     areas: raw.areas ?? [],

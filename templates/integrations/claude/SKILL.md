@@ -31,10 +31,15 @@ Fill one section per point: agree / disagree / need data, with reasons and evide
 refuses a reply when you already used the turn limit on a point - then escalate instead:
 `collab state SYNC-007 discussing --level T2`.
 
+## When the other side agrees
+If the last turn agrees on every point, `reply` refuses. Conclude instead (below). New topic? Open a new ticket;
+tickets are capped in turns and points.
+
 ## Conclude and sign
 - `collab conclude SYNC-007` creates `99-conclusion.md` (or reuses it). Write: the common
   conclusion, open disagreements as options with trade-offs, rejected alternatives.
-- Each agent signs once it agrees the conclusion is fair: `collab sign SYNC-007`.
+- Each agent signs once it agrees the conclusion is fair: `collab sign SYNC-007`. The signature covers the
+  exact text: if anyone edits the conclusion afterwards, everyone who signed must read it and sign again.
   When both agents signed, the ticket becomes `agreed` and waits for the deciding human.
 
 ## Submit

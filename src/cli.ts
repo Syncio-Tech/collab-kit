@@ -17,7 +17,7 @@ Daily
   collab reply <ID> [--points P1,P2] [--waiting-for ID]
   collab conclude <ID>
   collab sign <ID>
-  collab decide <ID> --decision approve|park|reject [--option O] [--note N]      (humans)
+  collab decide <ID>[=option] [<ID>[=option] ...] --decision approve|park|reject [--option O] [--note N]   (humans)
   collab state <ID> [discussing|in-spec|conformed] [--level Tn] [--ref TAG] [--reason R]
   collab index
   collab check [--base REF] [--pr] [--json]
