@@ -12,6 +12,20 @@ import { check, formatDiags } from "./core/rules.js";
 import { listTickets } from "./core/ticket.js";
 import { Heartbeat, Reminder, ago, dueReminders, fetchSignals, readSignals, writeSignals } from "./core/signals.js";
 import { CliError, VERSION } from "./core/util.js";
+import { CollabEvent, runnerEvent } from "./core/events.js";
+
+// runner events of the current tick, flushed to the signals branch (events/<agent>.json, last 500)
+let tickLog: { ev: CollabEvent[]; ctx?: Ctx; dir?: string } = { ev: [] };
+function rec(type: string, subject: string | undefined, data: Record<string, any>) {
+  const c = tickLog.ctx; if (!c) return;
+  tickLog.ev.push(runnerEvent(c.cfg, type, c.me!.id, subject, data, new Date(now()).toISOString()));
+}
+function flush(ws: Workspace) {
+  const { ev, ctx, dir } = tickLog; tickLog = { ev: [] };
+  if (!ev.length || !ctx || !dir) return;
+  try { writeSignals(dir, { [`events/${ctx.me!.id}.json`]: (cur: any) => [...(Array.isArray(cur) ? cur : []), ...ev].slice(-500) }, `events: ${ctx.me!.id}`); }
+  catch (e: any) { log(ws, `could not write events: ${e.message ?? e}`); }
+}
 
 type Flags = Record<string, string | boolean>;
 const str = (f: Flags, k: string) => (typeof f[k] === "string" ? (f[k] as string) : undefined);
@@ -113,6 +127,7 @@ export function cmdAutoRun(f: Flags) {
     for (const ws of c.workspaces) {
       try { tick(ws, c, st, t); }
       catch (e: any) { log(ws, `ERROR ${e.message ?? e}`); }
+      finally { flush(ws); }
     }
     saveState(st);
   } finally { unlock(); }
@@ -151,6 +166,7 @@ function tick(ws: Workspace, c: AutoConfig, st: AutoState, t: number) {
 
   const ctx = loadCtx(dir, ws.as);
   const me = ctx.me!;
+  tickLog = { ev: [], ctx, dir };
   const tickets = listTickets(dir, ctx.cfg);
   const waiting = tickets.filter((x) => x.doc.data.waiting_for === me.id);
   const iso = new Date(t).toISOString();
@@ -193,23 +209,28 @@ function tick(ws: Workspace, c: AutoConfig, st: AutoState, t: number) {
   if (pending.length) { log(ws, `waiting for CI to merge ${pending.join(", ")} - not calling the agent again`); return; }
   if (ctx.cfg.autonomy !== "semi") { log(ws, `waiting: ${convo.map((x) => x.id).join(", ")} - autonomy is manual, agent not called`); return; }
   const day = iso.slice(0, 10);
-  if ((st.runs[day] ?? 0) >= c.max_agent_runs_per_day) { log(ws, `daily agent budget used (${c.max_agent_runs_per_day})`); return; }
+  if ((st.runs[day] ?? 0) >= c.max_agent_runs_per_day) {
+    log(ws, `daily agent budget used (${c.max_agent_runs_per_day})`);
+    if (st.runs[`${day}:noted`] !== 1) { st.runs[`${day}:noted`] = 1; rec("runner.skipped", undefined, { reason: "daily agent budget used", budget: c.max_agent_runs_per_day }); }
+    return;
+  }
   st.runs[day] = (st.runs[day] ?? 0) + 1;
 
   const cmd = ws.agent ?? defaultAgent(ws, me.role);
   log(ws, `calling agent for ${convo.map((x) => x.id).join(", ")}`);
+  rec("runner.agent_called", convo.length === 1 ? convo[0].id : undefined, { tickets: convo.map((x) => x.id), agent: cmd[0] });
   const r = spawnSync(cmd[0], cmd.slice(1), {
     cwd: dir, encoding: "utf8", timeout: c.agent_timeout_min * 60000,
-    env: { ...process.env, COLLAB_AS: me.id, COLLAB_AUTO: "1", PATH: `${shim()}:${process.env.PATH ?? ""}` },
+    env: { ...process.env, COLLAB_AS: me.id, COLLABKIT_AS: me.id, COLLAB_AUTO: "1", PATH: `${shim()}:${process.env.PATH ?? ""}` },
   });
   if (r.error || r.status !== 0) log(ws, `agent exited ${r.status ?? r.error?.message} ${(r.stderr ?? "").slice(-300)}`);
 
   // 4. accept only ticket changes that pass check; anything else is thrown away
   const changed = changedSince(dir, "HEAD");
   const outside = changed.filter((x) => !x.path.startsWith(ctx.cfg.folder + "/"));
-  const discard = (why: string) => { log(ws, `discarded agent changes: ${why}`); sh(dir, ["reset", "--quiet", "--hard", "origin/main"]); sh(dir, ["clean", "-qfd", "-e", ".collabkit/local.yml"]); };
+  const discard = (why: string) => { log(ws, `discarded agent changes: ${why}`); rec("runner.discarded", convo.length === 1 ? convo[0].id : undefined, { reason: why.split("\n")[0] }); sh(dir, ["reset", "--quiet", "--hard", "origin/main"]); sh(dir, ["clean", "-qfd", "-e", ".collabkit/local.yml"]); };
   if (outside.length) return discard(`files outside ${ctx.cfg.folder}/: ${outside.map((x) => x.path).join(", ")}`);
-  if (!changed.length) { log(ws, "agent made no change"); return; }
+  if (!changed.length) { log(ws, "agent made no change"); rec("runner.discarded", convo.length === 1 ? convo[0].id : undefined, { reason: "agent made no change" }); return; }
   const errs = check(dir, ctx.cfg, {}).filter((d) => d.severity === "error");
   if (errs.length) return discard("check failed\n" + formatDiags(errs));
   const ids = [...new Set(changed.map((x) => x.path.split("/")[1]).filter((n) => /^[A-Z]+-\d{3,}$/.test(n)))].sort();
@@ -223,6 +244,7 @@ function tick(ws: Workspace, c: AutoConfig, st: AutoState, t: number) {
   sh(dir, ["switch", "--quiet", "main"]);
   sh(dir, ["branch", "--quiet", "-D", branch]);
   log(ws, `pushed ${branch} - CI checks and merges it`);
+  rec("runner.pushed", ids.length === 1 ? ids[0] : undefined, { tickets: ids, branch });
 }
 
 // ---------------------------------------------------------------- install
@@ -230,7 +252,8 @@ export function cmdAutoInstall(f: Flags) {
   const bin = shim();
   const label = "tech.collabkit.auto";
   const logf = join(home(), "auto.log");
-  const path = [bin, dirname(process.execPath), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].join(":");
+  // the PATH of the terminal running `install` (claude often lives in ~/.local/bin), plus the usual places
+  const path = [...new Set([bin, dirname(process.execPath), ...(process.env.PATH ?? "").split(":"), join(homedir(), ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].filter(Boolean))].join(":");
   if (platform() !== "darwin" || f.print === true) {
     if (platform() !== "darwin") {
       say("not macOS: add this line with `crontab -e` (runs every minute; collab decides when 15 min have passed):");

@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Collab history</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --ink: #1c1d1f; --muted: #6b6f76; --line: #e3e3df; --grid: #efefec;
+  --spec-agent: #5b8def; --spec-human: #1f4fb8; --impl-agent: #f0a04b; --impl-human: #b5600e; --ci: #8a8f98;
+  --bad: #d23f3f; --remind: #c9821a; --ok: #2f8f5b; --sel: #fff6d6;
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #141517; --panel: #1c1d20; --ink: #e9e9e6; --muted: #9a9ea6; --line: #2e3034; --grid: #25272b;
+  --spec-agent: #7aa5ff; --spec-human: #a9c3ff; --impl-agent: #f3b46c; --impl-human: #ffcf99; --ci: #8a8f98;
+  --bad: #ff6b6b; --remind: #e5a646; --ok: #5cc48a; --sel: #3a3420; } }
+:root[data-theme="dark"] {
+  --bg: #141517; --panel: #1c1d20; --ink: #e9e9e6; --muted: #9a9ea6; --line: #2e3034; --grid: #25272b;
+  --spec-agent: #7aa5ff; --spec-human: #a9c3ff; --impl-agent: #f3b46c; --impl-human: #ffcf99; --ci: #8a8f98;
+  --bad: #ff6b6b; --remind: #e5a646; --ok: #5cc48a; --sel: #3a3420; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font); }
+main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 64px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin-bottom: 18px; }
+h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 28px 0 10px; font-weight: 600; }
+.sub { color: var(--muted); font-size: 13px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.tile b { display: block; font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tile span { color: var(--muted); font-size: 12px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow-x: auto; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); margin: 8px 2px 0; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+svg text { fill: var(--ink); font-family: var(--font); }
+svg .m { fill: var(--muted); }
+.row:hover rect.hit, .row.sel rect.hit { fill: var(--sel); }
+.row { cursor: pointer; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+td.n { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.bar { display: inline-block; height: 8px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+a { color: var(--spec-agent); }
+code, .mono { font-family: var(--mono); font-size: 12px; }
+details summary { cursor: pointer; color: var(--muted); margin: 8px 0; }
+.tag { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11px; border: 1px solid var(--line); color: var(--muted); }
+.bad { color: var(--bad); }
+.toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+select { max-width: 100%; }
+td:first-child { white-space: nowrap; }
+th.n { text-align: right; }
+select, button { font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+</style>
+</head>
+<body>
+<main>
+  <header><h1 id="title">Collab history</h1><span class="sub" id="meta"></span></header>
+  <section class="tiles" id="tiles"></section>
+
+  <h2>Timeline · who each ticket waited on</h2>
+  <div class="panel"><svg id="timeline" role="img" aria-label="Timeline of tickets"></svg></div>
+  <div class="legend" id="legend"></div>
+
+  <h2>Conversation · <span id="selname"></span></h2>
+  <div class="toolbar"><select id="pick" aria-label="Ticket"></select><span class="sub" id="seltitle"></span></div>
+  <div class="panel"><svg id="seq" role="img" aria-label="Sequence of one ticket"></svg></div>
+
+  <h2>Waiting time by party (hours)</h2>
+  <div class="panel"><table id="wait"></table></div>
+
+  <h2>Human decisions</h2>
+  <div class="panel"><table id="decisions"></table></div>
+
+  <details><summary>All events (CloudEvents)</summary><div class="panel"><table id="raw"></table></div></details>
+</main>
+<script id="collab-data" type="application/json">/*__COLLAB_DATA__*/</script>
+<script>
+(function () {
+  const D = JSON.parse(document.getElementById("collab-data").textContent);
+  const NS = "http://www.w3.org/2000/svg";
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const P = D.parties;
+  const LANES = [
+    { id: P["spec-owner"].human, label: P["spec-owner"].human, color: "--spec-human", human: true },
+    { id: P["spec-owner"].agent, label: P["spec-owner"].agent, color: "--spec-agent" },
+    { id: P.implementer.agent, label: P.implementer.agent, color: "--impl-agent" },
+    { id: P.implementer.human, label: P.implementer.human, color: "--impl-human", human: true },
+    { id: "git", label: "git / CI", color: "--ci" },
+  ];
+  const laneOf = (a) => { const i = LANES.findIndex((l) => l.id === a); return i < 0 ? LANES.length - 1 : i; };
+  const colorOf = (a) => css(LANES[laneOf(a)].color);
+  const short = (t) => t.replace("tech.collabkit.", "");
+  const ts = (s) => Date.parse(s);
+  const fmt = (t) => new Date(t).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const hrs = (ms) => (ms / 36e5);
+  const el = (tag, attrs, parent, text) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; if (parent) parent.appendChild(e); return e; };
+  const h = (tag, html) => { const e = document.createElement(tag); if (html != null) e.innerHTML = html; return e; };
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const ANOM = ["state.reverted", "file.removed", "turn.edited", "level.lowered", "conclusion.edited", "runner.discarded"];
+
+  const ev = D.events.map((e) => ({ ...e, t: ts(e.time), k: short(e.type) })).sort((a, b) => a.t - b.t);
+  const ids = [...new Set(D.tickets.map((t) => t.id).concat(ev.filter((e) => e.subject).map((e) => e.subject)))].sort();
+  const now = ts(D.generated);
+  const by = (id) => ev.filter((e) => e.subject === id);
+  const tinfo = Object.fromEntries(D.tickets.map((t) => [t.id, t]));
+
+  // waiting segments per ticket, from the ticket snapshot carried by each event
+  function segments(id) {
+    const es = by(id).filter((e) => e.data && e.data.waiting_for !== undefined && !e.k.startsWith("runner.") && e.k !== "reminder.sent");
+    const out = [];
+    for (let i = 0; i < es.length; i++) {
+      const w = es[i].data.waiting_for, end = i + 1 < es.length ? es[i + 1].t : now;
+      if (w && w !== "none" && end > es[i].t) out.push({ who: w, a: es[i].t, b: end });
+    }
+    return out;
+  }
+  const waitByTicket = Object.fromEntries(ids.map((id) => { const m = {}; for (const s of segments(id)) m[s.who] = (m[s.who] || 0) + (s.b - s.a); return [id, m]; }));
+
+  // ---- header + tiles
+  document.getElementById("title").textContent = `${D.project} · collab history`;
+  document.title = `${D.project} history`;
+  document.getElementById("meta").textContent = `collabkit ${D.collabkit} · ${ev.length} events · generated ${fmt(now)}`;
+  const decisions = ev.filter((e) => e.k === "decision.recorded");
+  const ttd = ids.map((id) => { const o = by(id).find((e) => e.k === "ticket.opened"), d = by(id).find((e) => e.k === "decision.recorded"); return o && d ? d.t - o.t : null; }).filter((x) => x != null).sort((a, b) => a - b);
+  const med = ttd.length ? ttd[Math.floor(ttd.length / 2)] : null;
+  const anomalies = ev.filter((e) => ANOM.includes(e.k) && e.k !== "runner.discarded");
+  const tiles = [
+    [ids.length, "tickets"], [ev.filter((e) => e.k === "turn.added").length, "agent turns"], [decisions.length, "human decisions"],
+    [med == null ? "–" : `${hrs(med).toFixed(1)} h`, "median open → decision"], [ev.filter((e) => e.k === "reminder.sent").length, "reminders sent"],
+    [anomalies.length, "rule anomalies"],
+  ];
+  for (const [v, l] of tiles) { const d = h("div"); d.className = "tile"; d.innerHTML = `<b${l === "rule anomalies" && v ? ' class="bad"' : ""}>${esc(v)}</b><span>${esc(l)}</span>`; document.getElementById("tiles").appendChild(d); }
+
+  // ---- timeline
+  let selected = ids.find((id) => (tinfo[id] || {}).waiting_for && tinfo[id].waiting_for !== "none") || ids[ids.length - 1];
+  function drawTimeline() {
+    const svg = document.getElementById("timeline"); svg.innerHTML = "";
+    const L = 92, R = 16, top = 26, rowH = 30, W = Math.max(720, svg.parentElement.clientWidth - 24);
+    const tev = ev.filter((e) => e.subject);
+    const first = Math.min(...(tev.length ? tev : ev).map((e) => e.t)), t1 = Math.max(now, ...ev.map((e) => e.t));
+    const t0 = first - (t1 - first) * 0.02;
+    const x = (t) => L + ((t - t0) / Math.max(1, t1 - t0)) * (W - L - R);
+    const H = top + ids.length * rowH + 26;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
+    // grid: ~6 ticks
+    const n = Math.max(2, Math.min(8, Math.floor((W - L - R) / 150)));
+    for (let i = 0; i <= n; i++) { const t = t0 + (i / n) * (t1 - t0); el("line", { x1: x(t), x2: x(t), y1: top - 6, y2: H - 22, stroke: css("--grid") }, svg); el("text", { x: x(t), y: 14, "text-anchor": i === 0 ? "start" : i === n ? "end" : "middle", "font-size": 11, class: "m" }, svg, fmt(t)); }
+    for (const r of ev.filter((e) => e.k === "spec.released" && e.t >= t0)) {
+      el("line", { x1: x(r.t), x2: x(r.t), y1: top - 4, y2: H - 18, stroke: css("--ok"), "stroke-dasharray": "3 3" }, svg);
+      el("text", { x: x(r.t), y: H - 6, "text-anchor": "middle", "font-size": 10, "font-weight": 600, fill: css("--ok") }, svg, r.data.tag);
+    }
+    ids.forEach((id, i) => {
+      const y = top + i * rowH;
+      const g = el("g", { class: "row" + (id === selected ? " sel" : ""), tabindex: 0 }, svg);
+      el("rect", { class: "hit", x: 0, y, width: W, height: rowH, fill: "transparent", rx: 4 }, g);
+      el("text", { x: 8, y: y + rowH / 2 + 4, "font-size": 12, "font-weight": 600 }, g, id);
+      for (const s of segments(id)) {
+        const r = el("rect", { x: x(s.a), y: y + 9, width: Math.max(1.5, x(s.b) - x(s.a)), height: rowH - 18, rx: 3, fill: colorOf(s.who), opacity: 0.35 }, g);
+        el("title", {}, r, `waiting on ${s.who}: ${hrs(s.b - s.a).toFixed(1)} h`);
+      }
+      for (const e of by(id)) {
+        const cx = x(e.t), cy = y + rowH / 2; let m;
+        if (e.k === "turn.added") m = el("circle", { cx, cy, r: 4.5, fill: colorOf(e.data.actor), stroke: css("--panel"), "stroke-width": 1.5 }, g);
+        else if (e.k === "decision.recorded") m = el("path", { d: `M${cx} ${cy - 8}L${cx + 8} ${cy}L${cx} ${cy + 8}L${cx - 8} ${cy}Z`, fill: colorOf(e.data.actor), stroke: css("--panel"), "stroke-width": 1.5 }, g);
+        else if (e.k === "level.raised") m = el("path", { d: `M${cx} ${cy - 7}L${cx + 5} ${cy + 1}L${cx - 5} ${cy + 1}Z`, fill: css("--ink") }, g);
+        else if (e.k === "conclusion.signed") m = el("rect", { x: cx - 1, y: cy - 7, width: 2, height: 14, fill: colorOf(e.data.actor) }, g);
+        else if (e.k === "reminder.sent") m = el("circle", { cx, cy: y + 6, r: 3, fill: css("--remind") }, g);
+        else if (e.k === "ticket.opened") m = el("circle", { cx, cy, r: 4.5, fill: css("--panel"), stroke: colorOf(e.data.actor), "stroke-width": 2 }, g);
+        else if (e.k === "state.changed" && (e.data.to === "conformed" || e.data.to === "in-spec")) m = el("rect", { x: cx - 4, y: cy - 4, width: 8, height: 8, fill: css("--ok"), rx: 1 }, g);
+        else if (ANOM.includes(e.k)) { m = el("g", {}, g); el("path", { d: `M${cx - 5} ${cy - 5}L${cx + 5} ${cy + 5}M${cx + 5} ${cy - 5}L${cx - 5} ${cy + 5}`, stroke: css("--bad"), "stroke-width": 2.2 }, m); }
+        if (m) el("title", {}, m, `${fmt(e.t)} · ${e.k} · ${e.data.actor}${e.data.option ? " · option " + e.data.option : ""}${e.data.decision ? " · " + e.data.decision : ""}${e.data.to ? " · → " + e.data.to : ""}`);
+      }
+      g.addEventListener("click", () => select(id));
+      g.addEventListener("keydown", (k) => { if (k.key === "Enter") select(id); });
+    });
+    const pn = svg.parentElement; pn.scrollLeft = pn.scrollWidth;   // newest on screen on narrow displays
+    const lg = document.getElementById("legend"); lg.innerHTML = "";
+    for (const l of LANES) lg.appendChild(h("span", `<i style="background:var(${l.color})"></i>${esc(l.label)}`));
+    lg.appendChild(h("span", "● turn &nbsp;◆ human decision &nbsp;▲ level raised &nbsp;| signature &nbsp;■ in spec / conformed &nbsp;<b style=\"color:var(--remind)\">•</b> reminder &nbsp;<b class=\"bad\">×</b> rule anomaly &nbsp;bar = waiting on"));
+  }
+
+  // ---- sequence for one ticket
+  function label(e) {
+    const d = e.data;
+    switch (e.k) {
+      case "ticket.opened": return `opens: ${d.title ?? ""} (${d.level})`;
+      case "turn.added": return `turn ${String(d.turn).padStart(2, "0")} · ` + Object.entries(d.stances || {}).map(([p, s]) => `${p} ${s}`).join(", ");
+      case "level.raised": return `raises ${d.from} → ${d.to}${d.reason ? ": " + d.reason : ""}`;
+      case "level.lowered": return `LOWERS ${d.from} → ${d.to}`;
+      case "ticket.concluded": return "writes the conclusion";
+      case "conclusion.signed": return "signs the conclusion";
+      case "conclusion.edited": return "edits the conclusion" + (d.had_signatures?.length ? " (voids signatures)" : "");
+      case "decision.recorded": return `DECIDES ${d.decision}${d.option ? " · option " + d.option : ""}${d.note ? " · " + d.note : ""}`;
+      case "state.changed": return `${d.from} → ${d.to}${d.ref ? " @ " + d.ref : ""}`;
+      case "state.reverted": return `state went back ${d.from} → ${d.to}`;
+      case "file.removed": return `removed ${d.file}`;
+      case "turn.edited": return `edited turn ${d.turn} of ${d.author}`;
+      case "reminder.sent": return `reminder → ${d.waiting_for}${d.notify ? " (@" + d.notify + ")" : ""}`;
+      case "runner.agent_called": return "runner calls the agent";
+      case "runner.pushed": return `runner pushes ${d.branch}`;
+      case "runner.discarded": return `runner discards: ${d.reason}`;
+      default: return e.k;
+    }
+  }
+  function drawSeq() {
+    const svg = document.getElementById("seq"); svg.innerHTML = "";
+    const es = by(selected);
+    const t = tinfo[selected] || {};
+    document.getElementById("selname").textContent = selected;
+    document.getElementById("seltitle").textContent = `${t.title ?? ""} · ${t.level ?? ""} · ${t.state ?? ""}${t.waiting_for && t.waiting_for !== "none" ? " · waiting on " + t.waiting_for : ""}`;
+    const colW = 104, L = 108, top = 34, rowH = 26, W = Math.max(720, L + LANES.length * colW + 380);
+    const H = top + es.length * rowH + 16;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
+    const cx = (i) => L + i * colW + colW / 2;
+    LANES.forEach((l, i) => {
+      el("line", { x1: cx(i), x2: cx(i), y1: top - 8, y2: H - 8, stroke: css("--grid"), "stroke-width": 2 }, svg);
+      el("text", { x: cx(i), y: 16, "text-anchor": "middle", "font-size": 12, "font-weight": 600, fill: css(l.color) }, svg, l.label);
+    });
+    es.forEach((e, r) => {
+      const y = top + r * rowH + rowH / 2, a = laneOf(e.data.actor);
+      el("text", { x: 4, y: y + 4, "font-size": 11, class: "m" }, svg, fmt(e.t));
+      const w = e.data.waiting_for, b = w && w !== "none" ? laneOf(w) : -1;
+      if (b >= 0 && b !== a && !e.k.startsWith("runner.") && e.k !== "reminder.sent") {
+        const dir = b > a ? 1 : -1;
+        el("line", { x1: cx(a) + dir * 7, x2: cx(b) - dir * 9, y1: y, y2: y, stroke: colorOf(e.data.actor), "stroke-width": 1.5, opacity: 0.7 }, svg);
+        el("path", { d: `M${cx(b) - dir * 9} ${y - 4}L${cx(b) - dir * 2} ${y}L${cx(b) - dir * 9} ${y + 4}Z`, fill: colorOf(e.data.actor), opacity: 0.7 }, svg);
+      }
+      const anom = ANOM.includes(e.k), dec = e.k === "decision.recorded";
+      if (dec) el("path", { d: `M${cx(a)} ${y - 8}L${cx(a) + 8} ${y}L${cx(a)} ${y + 8}L${cx(a) - 8} ${y}Z`, fill: colorOf(e.data.actor) }, svg);
+      else el("circle", { cx: cx(a), cy: y, r: 5.5, fill: anom ? css("--bad") : colorOf(e.data.actor), stroke: css("--panel"), "stroke-width": 1.5 }, svg);
+      const tx = el("text", { x: L + LANES.length * colW + 10, y: y + 4, "font-size": 12, "font-weight": dec ? 650 : 400 }, svg, label(e));
+      if (anom) tx.setAttribute("fill", css("--bad"));
+      if (e.data.commit) el("title", {}, tx, `commit ${e.data.commit.slice(0, 7)} · ${e.k} · ${e.data.actor}`);
+    });
+    if (!es.length) el("text", { x: 12, y: top + 10, class: "m" }, svg, "no events");
+  }
+  function select(id) { selected = id; document.getElementById("pick").value = id; drawTimeline(); drawSeq(); }
+
+  // ---- tables
+  function tables() {
+    const parties = LANES.slice(0, 4).map((l) => l.id);
+    const max = Math.max(1, ...ids.flatMap((id) => parties.map((p) => waitByTicket[id][p] || 0)));
+    let s = `<tr><th>ticket</th>${parties.map((p) => `<th class="n" style="color:var(${LANES[laneOf(p)].color})">${esc(p)}</th>`).join("")}<th class="n">turns</th><th>levels</th><th>state</th></tr>`;
+    const tot = {};
+    for (const id of ids) {
+      const w = waitByTicket[id], es = by(id);
+      const lv = [es.find((e) => e.k === "ticket.opened")?.data.level, ...es.filter((e) => e.k === "level.raised" || e.k === "level.lowered").map((e) => e.data.to)].filter(Boolean).join(" → ");
+      s += `<tr><td><a href="#" data-id="${esc(id)}">${esc(id)}</a></td>` + parties.map((p) => { const v = w[p] || 0; tot[p] = (tot[p] || 0) + v;
+        return `<td class="n"><span class="bar" style="width:${Math.round((v / max) * 60)}px;background:var(${LANES[laneOf(p)].color})"></span>${v ? hrs(v).toFixed(1) : "–"}</td>`; }).join("") +
+        `<td class="n">${es.filter((e) => e.k === "turn.added").length}</td><td>${esc(lv)}</td><td>${esc((tinfo[id] || {}).state ?? "")}</td></tr>`;
+    }
+    s += `<tr><th>total</th>${parties.map((p) => `<th class="n">${tot[p] ? hrs(tot[p]).toFixed(1) : "–"}</th>`).join("")}<th></th><th></th><th></th></tr>`;
+    const wt = document.getElementById("wait"); wt.innerHTML = s;
+    wt.querySelectorAll("a[data-id]").forEach((a) => a.addEventListener("click", (x) => { x.preventDefault(); select(a.dataset.id); document.getElementById("seq").scrollIntoView({ behavior: "smooth", block: "center" }); }));
+    document.getElementById("decisions").innerHTML = `<tr><th>when</th><th>ticket</th><th>who</th><th>decision</th><th>option</th><th>note</th></tr>` +
+      (decisions.length ? decisions.map((e) => `<tr><td>${esc(fmt(e.t))}</td><td>${esc(e.subject)}</td><td>${esc(e.data.actor)}</td><td><b>${esc(e.data.decision)}</b></td><td>${esc(e.data.option ?? "")}</td><td>${esc(e.data.note ?? "")}</td></tr>`).join("") : `<tr><td colspan="6" class="sub">no decisions yet</td></tr>`);
+    document.getElementById("raw").innerHTML = `<tr><th>time</th><th>type</th><th>subject</th><th>actor</th><th>commit</th></tr>` +
+      ev.map((e) => `<tr${ANOM.includes(e.k) ? ' class="bad"' : ""}><td class="mono">${esc(e.time)}</td><td class="mono">${esc(e.k)}</td><td>${esc(e.subject ?? "")}</td><td>${esc(e.data.actor)}</td><td class="mono">${esc((e.data.commit || "").slice(0, 7))}</td></tr>`).join("");
+  }
+
+  const pick = document.getElementById("pick");
+  for (const id of ids) { const o = document.createElement("option"); o.value = id; o.textContent = `${id} · ${(tinfo[id] || {}).title ?? ""}`.slice(0, 80); pick.appendChild(o); }
+  pick.addEventListener("change", () => select(pick.value));
+  tables(); select(selected);
+  let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(drawTimeline, 150); });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => { drawTimeline(); drawSeq(); });
+})();
+</script>
+</body>
+</html>

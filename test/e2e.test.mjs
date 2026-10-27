@@ -15,6 +15,11 @@ const ck = (cwd, ...args) => {
 };
 const ok = (cwd, ...args) => { const r = ck(cwd, ...args); assert.equal(r.code, 0, r.out); return r.out; };
 const gitc = (cwd, ...a) => sh(cwd, "git", a);
+const ckE = (cwd, env, ...args) => {
+  const r = spawnSync("node", [CLI, ...args], { cwd, encoding: "utf8", env: { ...process.env, ...env } });
+  return { code: r.status, out: r.stdout + r.stderr };
+};
+const okE = (cwd, env, ...args) => { const r = ckE(cwd, env, ...args); assert.equal(r.code, 0, r.out); return r.out; };
 // write real content into a generated turn / ticket (what an agent must do)
 const fillTurn = (file) => writeFileSync(file, readFileSync(file, "utf8")
   .replace(/<name>/g, "scope").replace("- agree | disagree | need data", "- disagree").replace("- reason + evidence", "- evidence: run 2026-10-27 shows 0 rows"));
@@ -92,6 +97,30 @@ test("full ticket lifecycle across both parties", () => {
   ok(specB, "state", "SYNC-001", "in-spec", "--ref", "v0.2.0", "--as", "agent-a");
   ok(specB, "state", "SYNC-001", "conformed", "--ref", "v0.2.0", "--as", "agent-b");
   assert.match(ok(specB, "check"), /OK/);
+
+  // 0.4.1: the history is rebuilt from git, as CloudEvents
+  gitc(specB, "add", "-A"); gitc(specB, "commit", "-qm", "rest of SYNC-001", "-m", "Agent: agent-b"); gitc(specB, "tag", "v0.2.0");
+  const ev = ok(specB, "log").trim().split("\n").map((l) => JSON.parse(l));
+  assert.ok(ev.every((e) => e.specversion === "1.0" && e.type.startsWith("tech.collabkit.") && e.id && e.time && e.source === "collabkit:demo"));
+  const types = ev.map((e) => e.type.replace("tech.collabkit.", ""));
+  for (const k of ["ticket.opened", "turn.added", "level.raised", "ticket.concluded", "conclusion.signed", "decision.recorded", "state.changed", "spec.released"])
+    assert.ok(types.includes(k), k + " missing: " + types.join(","));
+  const opened = ev.find((e) => e.type.endsWith("ticket.opened"));
+  assert.equal(opened.data.actor, "agent-b"); assert.equal(opened.subject, "SYNC-001");
+  const dec = ev.find((e) => e.type.endsWith("decision.recorded"));
+  assert.equal(dec.data.actor, "human-a"); assert.equal(dec.data.option, "A"); assert.match(dec.data.commit, /^[0-9a-f]{40}$/);
+  assert.deepEqual(ev.filter((e) => e.type.endsWith("turn.added")).map((e) => e.data.actor), ["agent-a", "agent-b"]);
+  assert.deepEqual(ev.filter((e) => e.type.endsWith("conclusion.signed")).map((e) => e.data.actor).sort(), ["agent-a", "agent-b"]);
+  assert.ok(!types.some((k) => ["state.reverted", "turn.edited", "level.lowered"].includes(k)), types.join());
+  assert.match(ok(specB, "log", "--pretty", "--type", "decision.recorded"), /SYNC-001\s+decision.recorded\s+human-a approve=A/);
+  // viz: one self-contained file, data embedded, nothing loaded from the network
+  const home = join(env.T, "home");
+  const vo = okE(specB, { COLLAB_HOME: home }, "viz");
+  const html = readFileSync(join(home, "viz", "demo.html"), "utf8");
+  assert.match(vo, /events, 1 tickets/);
+  assert.ok(!/<script[^>]+src=|<link[^>]+href=/i.test(html));
+  const data = JSON.parse(/<script id="collab-data" type="application\/json">([\s\S]*?)<\/script>/.exec(html)[1]);
+  assert.equal(data.events.length, ev.length); assert.equal(data.parties["spec-owner"].human, "human-a");
 });
 
 test("rules: level lowering, edited turns, secrets, mixed PRs, turn limit", () => {
@@ -360,11 +389,6 @@ test("0.3.1: ship refuses non-ticket changes instead of committing half of them"
 });
 
 // ---------------------------------------------------------------- 0.4 semi-auto
-const ckE = (cwd, env, ...args) => {
-  const r = spawnSync("node", [CLI, ...args], { cwd, encoding: "utf8", env: { ...process.env, ...env } });
-  return { code: r.status, out: r.stdout + r.stderr };
-};
-const okE = (cwd, env, ...args) => { const r = ckE(cwd, env, ...args); assert.equal(r.code, 0, r.out); return r.out; };
 const sigFile = (repo, path, ref = "origin/collab/signals") => {
   gitc(repo, "fetch", "-q", "origin", "+refs/heads/collab/signals:refs/remotes/origin/collab/signals");
   return JSON.parse(gitc(repo, "show", `${ref}:${path}`));
@@ -419,6 +443,9 @@ test("0.4: semi-auto runner replies in its own clone, pushes a conv/auto branch,
   assert.equal(sigFile(specA, "heartbeat/agent-a.json").id, "agent-a");
   assert.match(gitc(specA, "show", "origin/collab/signals:.github/workflows/collabkit-signals.yml"), /collab notify/); // or GitHub would not run it
   assert.equal(sigFile(specA, "ack/SYNC-001.json")["agent-a"].turns, 0);
+  const rev = sigFile(specA, "events/agent-a.json").map((e) => e.type);
+  assert.deepEqual(rev, ["tech.collabkit.runner.agent_called", "tech.collabkit.runner.pushed"]);
+  assert.match(okE(specA, H, "log", "--pretty", "--type", "runner.pushed"), /SYNC-001\s+runner.pushed\s+agent-a/);
   // inside the 15-minute cycle a scheduled tick does nothing; `now` restarts the cycle
   assert.equal(okE(specA, H, "auto", "run").trim(), "");
   // the branch is not merged yet: the next run must not call the agent a second time
@@ -484,4 +511,23 @@ test("0.4: config rejects full auto; init ships the automerge + signals workflow
   gitc(specA, "checkout", "--", "conversation/config.yml");
   const p = okE(specA, H, "auto", "install", "--print");
   assert.match(p, /auto run|<key>StartInterval<\/key><integer>60<\/integer>/);
+});
+
+test("0.4.1: history flags rule bypasses (a turn edited after the fact, a state moved back)", () => {
+  const repo = soloRepo();
+  gitc(repo, "add", "-A"); gitc(repo, "commit", "-qm", "init");
+  const tid = openFilled(repo, "T2", "agent-b");
+  gitc(repo, "add", "-A"); gitc(repo, "commit", "-qm", "open", "-m", "Agent: agent-b");
+  ok(repo, "reply", tid, "--points", "P1", "--as", "agent-a"); fillTurn(lastTurn(join(repo, "conversation", tid)));
+  gitc(repo, "add", "-A"); gitc(repo, "commit", "-qm", "turn", "-m", "Agent: agent-a");
+  const f = lastTurn(join(repo, "conversation", tid));
+  writeFileSync(f, readFileSync(f, "utf8") + "\nedited later\n");
+  const tf = join(repo, "conversation", tid, "ticket.md");
+  gitc(repo, "commit", "-qam", "sneaky edit");
+  writeFileSync(tf, readFileSync(tf, "utf8").replace(/^state: discussing$/m, "state: open"));
+  gitc(repo, "commit", "-qam", "back to open");
+  const ev = ok(repo, "log", "--ticket", tid.split("-")[1]).trim().split("\n").map((l) => JSON.parse(l));
+  const edited = ev.find((e) => e.type.endsWith("turn.edited"));
+  assert.ok(edited, ev.map((e) => e.type).join()); assert.equal(edited.data.author, "agent-a");
+  assert.ok(ev.some((e) => e.type.endsWith("state.reverted") && e.data.from === "discussing" && e.data.to === "open"));
 });
