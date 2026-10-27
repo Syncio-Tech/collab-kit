@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.0 - 2026-10-27
+- **Identity is verified, not declared.** `parties.<role>.github` in config maps each party to a GitHub login.
+  CI runs `collab check --actor <login>`; a new ticket, turn, signature or decision for an id must be pushed by that
+  id's party login (`identity-mismatch`). Before, anyone could write `--as <human>`.
+- **`collab next`**: what is waiting for you, with the exact commands, per state. Agents start every session with it,
+  so prompts shrink to "follow collab next".
+- **`collab upgrade`**: repins the CI workflow, refreshes the README rules block, untouched templates and agent
+  files, and adds config keys introduced since setup (comments kept). Tickets are never touched.
+- CI workflow also runs on pushes to `main` (an alarm when something lands without a PR on plans where rulesets
+  are not enforced). Upgrade the workflow with `collab upgrade`.
+- Paths in printed commands are relative and quoted (spaces in folder names broke copy-paste).
+- **Shorter, linear workflow** (feedback: too many long commands, too much guidance needed):
+  - `collab` with no command = `collab next`.
+  - `collab sync`: spec repo to the default branch and pulled; refuses on uncommitted ticket changes; lists merged
+    local branches to delete.
+  - `collab ship`: the human's one command - check, branch, commit, push, PR link. Agents in `human_commit` mode
+    end with "run `collab ship`" instead of printing git commands.
+  - Short ticket ids everywhere: `4`, `004`, `sync-4` = `SYNC-004` (`collab decide 4=A 5=B ...`).
+  - Help, README and the rules block are ordered as one round: sync -> agent -> ship -> merge.
+
 ## 0.2.0 - 2026-10-27
 Rules learned from the first real project run (two agents, one human, three tickets end to end).
 - **A spec change is decided by the spec owner's human, whatever the level.** `state in-spec` refuses otherwise;

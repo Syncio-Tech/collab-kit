@@ -11,7 +11,7 @@ CLI does every mechanical step. Your identity is resolved from `.collabkit/local
 
 ## Every session
 1. `git -C {{spec_repo}} pull`
-2. `collab inbox` - list what waits for you. Report it to the human.
+2. `collab next` - what waits for you, with the exact commands. Report it to the human, then follow it.
 
 ## Raise an issue (open)
 Only when you found a real gap between spec and code, a design error, or the spec cannot be
@@ -42,9 +42,9 @@ tickets are capped in turns and points.
   exact text: if anyone edits the conclusion afterwards, everyone who signed must read it and sign again.
   When both agents signed, the ticket becomes `agreed` and waits for the deciding human.
 
-## Submit
-`collab check` then `collab submit SYNC-007`. In `agent_push` mode this creates a
-branch and a PR; in `human_commit` mode it prints the commands for your human.
+## Finish
+`collab check`. In `agent_push` mode run `collab ship` (branch, commit, push, PR link).
+In `human_commit` mode stop there and tell your human: "run `collab ship`". Never run git yourself.
 
 ## Never
 Lower a level, edit someone else's turn, touch files outside `{{conv}}/` in a conversation

@@ -16,6 +16,8 @@ export type Flags = Record<string, string | boolean>;
 const str = (f: Flags, k: string, d?: string): string | undefined => (typeof f[k] === "string" ? (f[k] as string) : d);
 const need = (f: Flags, k: string): string => { const v = str(f, k); if (!v) throw new CliError(`--${k} is required`); return v; };
 const log = (s = "") => process.stdout.write(s + "\n");
+/** A path as the user should type it: relative to where they stand, always quoted. */
+const shp = (p: string) => JSON.stringify(relative(process.cwd(), p) || ".");
 
 function ensureGitignore(root: string, lines: string[]) {
   const p = join(root, ".gitignore");
@@ -29,9 +31,15 @@ function writeIfAbsent(p: string, content: string, force: boolean, written: stri
   writeText(p, content); written.push(p);
 }
 
+/** "4", "004", "sync-4", "SYNC-004" all mean SYNC-004. */
+export function normId(cfg: Config, id: string): string {
+  const m = /^(?:([a-z]+)-?)?(\d+)$/i.exec(id.trim());
+  return m ? `${(m[1] ?? cfg.id_prefix).toUpperCase()}-${m[2].padStart(3, "0")}` : id.toUpperCase();
+}
+
 function getTicket(ctx: Ctx, id: string | undefined): Ticket {
-  if (!id) throw new CliError("ticket id required, e.g. SYNC-001");
-  const t = loadTicket(ctx.specRoot, ctx.cfg, id.toUpperCase());
+  if (!id) throw new CliError("ticket id required, e.g. 4 or SYNC-004");
+  const t = loadTicket(ctx.specRoot, ctx.cfg, normId(ctx.cfg, id));
   if (!t) throw new CliError(`ticket ${id} not found in ${relative(process.cwd(), convDir(ctx.specRoot, ctx.cfg)) || "."}`);
   return t;
 }
@@ -59,8 +67,8 @@ export function cmdInit(cwd: string, f: Flags) {
     impl_agent: str(f, "impl-agent", "agent-b")!, impl_human: str(f, "impl-human", "human-b")!, impl_mode: str(f, "impl-mode", "human_commit")!,
     github_org: str(f, "github-org", "OWNER")!,
   };
-  v.spec_human_gh = str(f, "spec-github", v.spec_human)!;
-  v.impl_human_gh = str(f, "impl-github", v.impl_human)!;
+  v.spec_human_gh = str(f, "spec-github", "CHANGE-ME")!;
+  v.impl_human_gh = str(f, "impl-github", "CHANGE-ME")!;
   for (const m of [v.spec_mode, v.impl_mode]) if (!["agent_push", "human_commit"].includes(m)) throw new CliError(`mode must be agent_push | human_commit, got ${m}`);
   const written: string[] = [], skipped: string[] = [];
   const conv = join(root, "conversation");
@@ -85,6 +93,7 @@ export function cmdInit(cwd: string, f: Flags) {
   for (const p of written) log(`  + ${relative(root, p.replace(/\s+\(.*$/, "")) + (p.includes("(") ? "  (merge into .github/CODEOWNERS)" : "")}`);
   for (const p of skipped) log(`  = ${relative(root, p)} (exists, kept; --force to overwrite)`);
   if (!isRepo(root)) log("\nnote: this folder is not a git repo yet - `git init` before using submit.");
+  if (v.spec_human_gh === "CHANGE-ME") log("\nnote: pass --spec-github/--impl-github (or edit parties.*.github in config.yml) so CI can verify who pushed what.");
   log(`\nNext: replace GitHub handles in .github/CODEOWNERS, protect the default branch (require PR + code owner review),\ninvite the implementer, then commit these files.`);
 }
 
@@ -126,10 +135,10 @@ function freshness(root: string): string[] {
   const out: string[] = [];
   const base = git(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], true).replace(/^origin\//, "") || "main";
   const branch = git(root, ["branch", "--show-current"], true);
-  if (branch && branch !== base) out.push(`spec repo is on branch "${branch}", not "${base}". Before a new turn: git -C ${root} switch ${base} && git -C ${root} pull`);
+  if (branch && branch !== base) out.push(`spec repo is on branch "${branch}", not "${base}". Before a new turn: git -C ${shp(root)} switch ${base} && git -C ${shp(root)} pull`);
   try { execFileSync("git", ["fetch", "--quiet", "origin"], { cwd: root, stdio: "ignore", timeout: 8000 }); } catch { /* offline: use what we know */ }
   const behind = Number(git(root, ["rev-list", "--count", `HEAD..origin/${base}`], true) || 0);
-  if (behind > 0) out.push(`spec repo is ${behind} commit(s) behind origin/${base}: git -C ${root} pull`);
+  if (behind > 0) out.push(`spec repo is ${behind} commit(s) behind origin/${base}: git -C ${shp(root)} pull`);
   return out;
 }
 
@@ -252,7 +261,7 @@ export function cmdDecide(ctx: Ctx, pos: string[], f: Flags) {
   // validate everything first, write nothing on error
   const items = pos.map((arg) => {
     const i = arg.indexOf("=");
-    const id = i < 0 ? arg : arg.slice(0, i);
+    const id = normId(ctx.cfg, i < 0 ? arg : arg.slice(0, i));
     const option = i < 0 ? str(f, "option") : arg.slice(i + 1);
     const t = getTicket(ctx, id);
     const d = t.doc.data;
@@ -313,7 +322,7 @@ export function cmdIndex(ctx: Ctx) {
 }
 
 export function cmdCheck(ctx: Ctx, f: Flags): number {
-  const ds = check(ctx.specRoot, ctx.cfg, { base: str(f, "base"), pr: f.pr === true });
+  const ds = check(ctx.specRoot, ctx.cfg, { base: str(f, "base"), pr: f.pr === true, actor: str(f, "actor") || process.env.COLLAB_ACTOR || undefined });
   if (f.json === true) log(JSON.stringify({ ok: !ds.some((d) => d.severity === "error"), diagnostics: ds }, null, 2));
   else log(formatDiags(ds));
   return ds.some((d) => d.severity === "error") ? 1 : 0;
@@ -331,7 +340,7 @@ export function cmdSubmit(ctx: Ctx, pos: string[], f: Flags) {
   if (!conv.length) throw new CliError("nothing to submit under " + ctx.cfg.folder + "/");
   const outside = changed.filter((c) => !c.path.startsWith(ctx.cfg.folder + "/")).map((c) => `${c.status} ${c.path}`);
   const touched = [...new Set(conv.map((c) => c.path.split("/")[1]).filter((n) => /^[A-Z]+-\d{3,}$/.test(n)))].sort();
-  const ids = pos.length ? pos.map((p) => p.toUpperCase()) : touched;
+  const ids = pos.length ? pos.map((p) => normId(ctx.cfg, p)) : touched;
   const label = ids.length === 0 ? "conversation" : ids.length === 1 ? ids[0] : `${ids[0]}..${ids.at(-1)!.split("-").pop()}`;
   const states = ids.map((id) => `${id} ${loadTicket(root, ctx.cfg, id)?.doc.data.state ?? "?"}`);
   const stamp = nowIso().slice(0, 16).replace(/[-:T]/g, "");
@@ -341,20 +350,24 @@ export function cmdSubmit(ctx: Ctx, pos: string[], f: Flags) {
   const base = git(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], true).replace(/^origin\//, "") || "main";
   const hasRemote = git(root, ["remote"], true).split("\n").includes("origin");
   const compare = compareUrl(root, base, branch);
+  const R = shp(root);
   const steps = [
-    `git -C ${root} switch -c ${branch}`,
-    `git -C ${root} add ${ctx.cfg.folder}`,
-    `git -C ${root} commit -m "${msg}" -m "Agent: ${m.id}"`,
-    `git -C ${root} push -u origin ${branch}`,
+    `git -C ${R} switch -c ${branch}`,
+    `git -C ${R} add ${ctx.cfg.folder}`,
+    `git -C ${R} commit -m "${msg}" -m "Agent: ${m.id}"`,
+    `git -C ${R} push -u origin ${branch}`,
     hasCommand("gh")
-      ? `gh pr create --repo "$(git -C ${root} remote get-url origin)" --base ${base} --head ${branch} --title "${msg}" --body "Agent: ${m.id}"`
+      ? `gh pr create --repo "$(git -C ${R} remote get-url origin)" --base ${base} --head ${branch} --title "${msg}" --body "Agent: ${m.id}"`
       : `# open the PR in a browser: ${compare ?? `GitHub > New pull request > ${branch} into ${base}`}`,
   ];
   const mode: Mode = ctx.cfg.parties[m.role].mode;
+  const ship = f.ship === true;
   if (outside.length) log(`note: changes outside ${ctx.cfg.folder}/ are left out of this commit:\n  ${outside.join("\n  ")}`);
-  if ((m.kind === "agent" && mode === "human_commit") || f["dry-run"] === true) {
-    log(`${m.id} is in human_commit mode${f["dry-run"] === true ? " (dry run)" : ""}. Ask ${ctx.cfg.parties[m.role].human} to run:\n`);
-    for (const s of steps) log("  " + s);
+  if (f["dry-run"] === true) { log("dry run - would run:\n"); for (const s of steps) log("  " + s); return; }
+  if (!ship && m.kind === "agent" && mode === "human_commit") {
+    log(`Ready. ${m.id} is in human_commit mode: ${ctx.cfg.parties[m.role].human}, run this in your terminal:\n`);
+    log(`  collab ship${pos.length ? " " + pos.join(" ") : ""}\n`);
+    log("(it creates the branch, commits, pushes and prints the PR link)");
     return;
   }
   git(root, ["switch", "-c", branch]);
@@ -376,4 +389,158 @@ function compareUrl(root: string, base: string, branch: string): string | undefi
   const url = git(root, ["remote", "get-url", "origin"], true);
   const m = /github\.com[:/]([^/]+)\/([^/]+?)(\.git)?$/.exec(url);
   return m ? `https://github.com/${m[1]}/${m[2]}/compare/${base}...${branch}?expand=1` : undefined;
+}
+
+// ---------------------------------------------------------------- next
+/** What should <me> do now? One line per ticket, with the exact command. Agents run this at session start. */
+export function cmdNext(ctx: Ctx, f: Flags) {
+  const m = me(ctx);
+  const C = "collab";
+  for (const w of freshness(ctx.specRoot)) log("WARN  " + w);
+  const owner = ctx.cfg.parties["spec-owner"];
+  const impl = ctx.cfg.parties.implementer;
+  const mine = listTickets(ctx.specRoot, ctx.cfg).filter((t) => t.doc.data.waiting_for === m.id);
+  if (!mine.length) { log(`nothing waiting for ${m.id}.`); return; }
+  for (const t of mine) {
+    const d = t.doc.data;
+    const id = t.id;
+    const conv = shp(t.dir);
+    const steps: string[] = [];
+    const sigs = t.conclusion?.data.signatures ?? {};
+    const h = t.conclusion ? conclusionHash(t.conclusion.body) : "";
+    const myValid = (() => { const s = readSig(sigs[m.id]); return !!s && !s.legacy && s.sha256 === h; })();
+    const last = t.turns.at(-1);
+    const allAgree = !!last && last.by !== m.id && (() => { const st = Object.values(stances(last.doc.body)); return st.length > 0 && st.every((x) => x === "agree"); })();
+    switch (d.state) {
+      case "open": case "discussing":
+        if (m.kind !== "agent") { steps.push(`waiting on you as a human: read ${conv} and tell your agent what to do`); break; }
+        if (t.conclusion && !myValid) steps.push(`read ${shp(t.conclusionFile)}; if it is fair: ${C} sign ${id} (do not edit it; disagree? say so in a turn)`);
+        else if (allAgree || t.turns.length >= ctx.cfg.max_turns_per_ticket) steps.push(`${C} conclude ${id}`, `write ${shp(t.conclusionFile)}: conclusion, open disagreements as options, rejected alternatives`, `${C} sign ${id}`);
+        else steps.push(`read the ticket and the last turn in ${conv}`, `${C} reply ${id} --points P1[,P2]`, "write the new turn file: one section per point, agree | disagree | need data, reasons, sources (or \"not verified\")",
+          "if every point is agreed, conclude instead of replying");
+        break;
+      case "agreed":
+        steps.push(`read the options in ${shp(t.conclusionFile)} (Open disagreements)`, `${C} decide ${id}=<option> --decision approve|park|reject`);
+        break;
+      case "approved":
+        if (m.id === owner.agent) steps.push(`change the spec in a separate PR (spec files only), per decision "${d.decision?.option ?? ""}"`, "after merge, the spec owner tags it: git tag vX.Y.Z && git push origin refs/tags/vX.Y.Z", `then: ${C} state ${id} in-spec --ref vX.Y.Z`);
+        else steps.push(`implement the decision "${d.decision?.option ?? ""}" in code (code-only fix)`, `${C} state ${id} conformed --ref <spec tag the code follows>`);
+        break;
+      case "in-spec":
+        steps.push(`build against spec ${d.spec_change_ref}: update SPEC_VERSION, code, tests; merge the code PR first`, `then: ${C} state ${id} conformed --ref ${d.spec_change_ref}`);
+        break;
+      default:
+        steps.push(`state ${d.state}: nothing to do`);
+    }
+    log(`${id}  ${d.level}  ${d.state}  ${d.title}`);
+    steps.forEach((s, i) => log(`  ${i + 1}. ${s}`));
+  }
+  log("");
+  const humanShips = ctx.cfg.parties[m.role].mode === "human_commit" && m.kind === "agent";
+  log(humanShips
+    ? `when done: ${C} check, then tell ${ctx.cfg.parties[m.role].human} to run \`collab ship\` (you never run git or ship)`
+    : `when done: ${C} ship   (checks, commits, pushes, prints the PR link)`);
+  void impl; void f;
+}
+
+// ---------------------------------------------------------------- upgrade
+/** Bring files collabkit manages up to this version. Never touches tickets; keeps edited files unless --force. */
+export function cmdUpgrade(cwd: string, f: Flags) {
+  const dry = f["dry-run"] === true, force = f.force === true;
+  const changes: string[] = [];
+  const write = (p: string, s: string, why: string) => { if (exists(p) && readText(p) === s) return; changes.push(`${relative(cwd, p)}  ${why}`); if (!dry) writeText(p, s); };
+  let ctx: Ctx;
+  try { ctx = loadCtx(cwd, undefined, false); } catch (e) { throw e; }
+  const { specRoot, workRoot, cfg } = ctx;
+  const isSpecSide = specRoot === workRoot;
+  if (isSpecSide) {
+    const manifest = exists(join(specRoot, ".collabkit/manifest.json")) ? JSON.parse(readText(join(specRoot, ".collabkit/manifest.json"))).files ?? {} : {};
+    // workflow: repin
+    const wf = join(specRoot, ".github/workflows/collabkit-check.yml");
+    if (exists(wf)) {
+      const cur = readText(wf);
+      const fresh = fill(readText(templatePath("github", "collabkit-check.yml")), { version: VERSION });
+      // "untouched" = equal to a shipped template once version pins are ignored (users repin by hand)
+      const norm = (x: string) => x.replace(/collabkit(-cli@| )\d+\.\d+\.\d+/g, "collabkit$1X").trim();
+      const shipped = [readText(templatePath("github", "collabkit-check.yml")), readText(templatePath("github", "legacy", "collabkit-check.v0.yml"))];
+      const pristine = shipped.some((t) => norm(t.replace(/\{\{version\}\}/g, "0.0.0")) === norm(cur));
+      const edited = !pristine && manifest[".github/workflows/collabkit-check.yml"] && sha256(cur) !== manifest[".github/workflows/collabkit-check.yml"];
+      if (!edited || force) write(wf, fresh, "workflow -> " + VERSION);
+      else { const repinned = cur.replace(/collabkit-cli@\d+\.\d+\.\d+/g, `collabkit-cli@${VERSION}`); write(wf, repinned, "repinned to " + VERSION + " (file was edited by hand; kept the rest)"); }
+    }
+    // README: managed block between markers
+    const rd = join(specRoot, cfg.folder, "README.md");
+    if (exists(rd)) {
+      const p = cfg.parties;
+      const vars = { version: VERSION, spec_agent: p["spec-owner"].agent, spec_human: p["spec-owner"].human, spec_mode: p["spec-owner"].mode,
+        impl_agent: p.implementer.agent, impl_human: p.implementer.human, impl_mode: p.implementer.mode };
+      const tpl = fill(readText(templatePath("conversation", "README.md")), vars);
+      const block = /<!-- collabkit:start -->[\s\S]*?<!-- collabkit:end -->/;
+      const cur = readText(rd);
+      const nb = tpl.match(block)?.[0];
+      if (nb && block.test(cur)) write(rd, cur.replace(block, nb), "rules block");
+    }
+    // templates: replace when untouched
+    for (const n of ["ticket.md", "turn.md", "conclusion.md"]) {
+      const dst = join(specRoot, cfg.folder, "_templates", n);
+      const rp = `${cfg.folder}/_templates/${n}`;
+      const fresh = readText(templatePath("conversation", "_templates", n));
+      if (!exists(dst)) { write(dst, fresh, "added"); continue; }
+      const edited = manifest[rp] && sha256(readText(dst)) !== manifest[rp];
+      if (edited && !force) { changes.push(`${relative(cwd, dst)}  kept (edited by hand; --force to replace)`); continue; }
+      write(dst, fresh, "template");
+    }
+    // config: add keys introduced since the repo was set up, keep comments
+    const cp = join(specRoot, CONFIG_REL);
+    const doc = YAML.parseDocument(readText(cp));
+    const defaults: Record<string, any> = { max_turns_per_ticket: 6, max_points_per_ticket: 5 };
+    for (const [k, v] of Object.entries(defaults)) if (!doc.has(k)) doc.set(k, v);
+    for (const r of ["spec-owner", "implementer"]) if (!doc.hasIn(["parties", r, "github"])) doc.setIn(["parties", r, "github"], f[`${r === "spec-owner" ? "spec" : "impl"}-github`] ?? "CHANGE-ME");
+    write(cp, doc.toString(), "config keys");
+  }
+  // integrations: refresh what is installed in the work repo
+  const present: string[] = [];
+  if (exists(join(workRoot, "AGENTS.md")) && readText(join(workRoot, "AGENTS.md")).includes("collabkit:start")) present.push("generic");
+  if (exists(join(workRoot, ".claude/skills/collabkit/SKILL.md")) || (exists(join(workRoot, "CLAUDE.md")) && readText(join(workRoot, "CLAUDE.md")).includes("collabkit:start"))) present.push("claude");
+  if (present.length && !dry) {
+    const meId = ctx.me?.id ?? (isSpecSide ? cfg.parties["spec-owner"].agent : cfg.parties.implementer.agent);
+    const role = ctx.me?.role ?? (isSpecSide ? "spec-owner" : "implementer");
+    const files = [join(workRoot, "AGENTS.md"), join(workRoot, "CLAUDE.md"), join(workRoot, ".claude/skills/collabkit/SKILL.md")];
+    const snap = files.map((p) => (exists(p) ? readText(p) : undefined));
+    installIntegrations(present, { workRoot, specRoot, cfg, me: meId, role });
+    const changed = files.filter((p, i) => (exists(p) ? readText(p) : undefined) !== snap[i]).map((p) => relative(cwd, p));
+    if (changed.length) changes.push(`agent files refreshed: ${changed.join(", ")}`);
+  } else if (present.length) changes.push(`agent files would be refreshed: ${present.join(", ")}`);
+  if (isSpecSide && !dry) {
+    writeText(indexPath(specRoot, cfg), renderIndex(specRoot, cfg));
+    const files = [".github/workflows/collabkit-check.yml", `${cfg.folder}/README.md`, ...["ticket.md", "turn.md", "conclusion.md"].map((n) => `${cfg.folder}/_templates/${n}`)].map((r) => join(specRoot, r));
+    writeManifest(specRoot, files);
+  }
+  log(`collabkit ${VERSION} upgrade${dry ? " (dry run)" : ""}: ${changes.length ? "" : "already up to date"}`);
+  for (const c of changes) log("  ~ " + c);
+  if (isSpecSide && changes.some((c) => c.includes("config keys"))) log("\nCheck conversation/config.yml: set parties.*.github to the real GitHub logins (used to verify who pushed what).");
+  if (!dry && changes.length) log("Commit these changes in their own PR.");
+}
+
+// ---------------------------------------------------------------- sync
+/** Put the spec repo on its default branch, up to date. Refuses when there are uncommitted changes. */
+export function cmdSync(ctx: Ctx) {
+  const root = ctx.specRoot;
+  if (!isRepo(root)) throw new CliError(`${shp(root)} is not a git repo`);
+  const dirty = git(root, ["status", "--porcelain", "--", ctx.cfg.folder], true);
+  const base = git(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], true).replace(/^origin\//, "") || "main";
+  const branch = git(root, ["branch", "--show-current"], true);
+  if (dirty) {
+    throw new CliError(`uncommitted changes in ${ctx.cfg.folder}/ on "${branch}". Ship them first (\`collab ship\`), or set them aside: git -C ${shp(root)} stash -u`);
+  }
+  if (branch !== base) { git(root, ["switch", base]); log(`switched ${shp(root)} to ${base}`); }
+  const hasRemote = git(root, ["remote"], true).split("\n").includes("origin");
+  if (hasRemote) {
+    try { execFileSync("git", ["pull", "--ff-only", "--quiet"], { cwd: root, stdio: ["ignore", "ignore", "pipe"] }); }
+    catch (e: any) { throw new CliError(`git pull failed in ${shp(root)}: ${(e.stderr ?? e.message).toString().trim()}`); }
+  }
+  log(`${shp(root)} is on ${base}, up to date${hasRemote ? "" : " (no remote)"}.`);
+  // merged conv/* branches are noise; list them so the human can delete when they like
+  const stale = git(root, ["branch", "--merged", base, "--list", "conv/*", "decide/*", "spec-*"], true).split("\n").map((x) => x.trim()).filter(Boolean);
+  if (stale.length) log(`merged local branches you can delete: git -C ${shp(root)} branch -d ${stale.join(" ")}`);
 }

@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { Config, allIds, identify } from "./config.js";
+import { Config, allIds, githubOf, identify } from "./config.js";
 import { parse } from "./frontmatter.js";
 import { changedSince, hasRef, isRepo, showAt } from "./git.js";
 import { renderIndex, indexPath } from "./indexmd.js";
@@ -40,7 +40,7 @@ const SECRET_PATTERNS: [string, RegExp][] = [
   ["password assignment", /\b(password|passwd|pwd|secret|api[_-]?key)\s*[:=]\s*['"]?[^\s'"]{6,}/i],
 ];
 
-export interface CheckOpts { base?: string; pr?: boolean; }
+export interface CheckOpts { base?: string; pr?: boolean; actor?: string; }
 
 export function check(root: string, cfg: Config, opts: CheckOpts = {}): Diag[] {
   const out: Diag[] = [];
@@ -157,6 +157,27 @@ export function check(root: string, cfg: Config, opts: CheckOpts = {}): Diag[] {
       const text = readText(file);
       for (const re of forbidden) if (re.test(text)) err("forbidden-pattern", rel(root, file), `matches forbidden pattern /${re.source}/`);
       for (const [name, re] of SECRET_PATTERNS) if (re.test(text)) err("secret", rel(root, file), `looks like a ${name}; never write secrets into the conversation`);
+    }
+
+    // identity: who pushed this change must be allowed to speak for the ids it records
+    const vouch = (who: string, file: string, what: string) => {
+      if (!opts.actor) return;
+      const gh = githubOf(cfg, who);
+      if (!gh) { warn("identity-unverified", file, `${what} by ${who}: no github login configured for its party, cannot verify`); return; }
+      if (gh.toLowerCase() !== opts.actor.toLowerCase()) err("identity-mismatch", file, `${what} by ${who} was pushed by @${opts.actor}; only @${gh} may push for ${who}`);
+    };
+    if (base && opts.actor) {
+      const prevText0 = showAt(root, base, f);
+      const prev0 = prevText0 ? parse(prevText0).data : undefined;
+      if (!prev0) vouch(d.opened_by, f, "ticket opened");
+      if (d.decision?.by && JSON.stringify(d.decision) !== JSON.stringify(prev0?.decision)) vouch(d.decision.by, f, "decision");
+      for (const turn of t.turns) if (showAt(root, base, rel(root, turn.file)) === undefined) vouch(turn.by, rel(root, turn.file), "turn");
+      if (t.conclusion) {
+        const prevC = showAt(root, base, rel(root, t.conclusionFile));
+        const prevSigs = prevC ? parse(prevC).data.signatures ?? {} : {};
+        for (const [who, v] of Object.entries(t.conclusion.data.signatures ?? {}))
+          if (JSON.stringify(v) !== JSON.stringify(prevSigs[who])) vouch(who, rel(root, t.conclusionFile), "signature");
+      }
     }
 
     // history-based rules

@@ -3,27 +3,31 @@ import * as C from "./commands.js";
 import { loadCtx } from "./core/context.js";
 import { CliError, VERSION } from "./core/util.js";
 
-const HELP = `collab (collabkit ${VERSION}) - spec <-> implementation conversation channel for any agent
+const HELP = `collab (collabkit ${VERSION}) - spec <-> implementation channel for any agent
 
-Setup
-  collab init [--project N] [--integration generic,claude] [--spec-agent agent-a --spec-human human-a --spec-mode agent_push]
-                 [--impl-agent agent-b --impl-human human-b --impl-mode human_commit] [--as ID] [--force]
+The loop (one round)
+  human:  collab sync                 spec repo back on main, up to date
+  agent:  collab                      = collab next: what waits for you, numbered steps
+  agent:  (does the steps: open | reply | conclude | sign | state), then collab check
+  human:  collab ship [IDs]           branch + commit + push + PR link (agent_push agents may ship themselves)
+  human:  merge the PR on GitHub      then back to collab sync
+
+Ticket work (IDs can be short: 4 = SYNC-004)
+  collab open --title T --level T0..T3 --reason R --requirement R|NO_REQUIREMENT [--spec-ref REF]
+  collab reply 4 [--points P1,P2]       collab conclude 4       collab sign 4
+  collab decide 4=A [5=B ...] --decision approve|park|reject     (humans)
+  collab state 4 discussing|in-spec|conformed [--level Tn] [--ref TAG]
+
+Look
+  collab next | inbox [--all] | whoami | check [--pr --base REF --actor LOGIN] | index
+
+Setup and maintenance
+  collab init [--project N] [--integration generic,claude] [--spec-github LOGIN --impl-github LOGIN] ...
   collab link <spec-repo-path> [--as agent-b] [--integration generic,claude]
+  collab upgrade [--dry-run] [--force]
 
-Daily
-  collab whoami
-  collab inbox [--all]
-  collab open --title T --level T0..T3 --reason R --requirement R|NO_REQUIREMENT [--spec-ref REF] [--area A]
-  collab reply <ID> [--points P1,P2] [--waiting-for ID]
-  collab conclude <ID>
-  collab sign <ID>
-  collab decide <ID>[=option] [<ID>[=option] ...] --decision approve|park|reject [--option O] [--note N]   (humans)
-  collab state <ID> [discussing|in-spec|conformed] [--level Tn] [--ref TAG] [--reason R]
-  collab index
-  collab check [--base REF] [--pr] [--json]
-  collab submit [<ID>] [--dry-run]
-
-Global: --as <id> (or COLLABKIT_AS, or .collabkit/local.yml / link.yml), --cwd <dir>
+Global: --as <id> (or COLLAB_AS, .collabkit/local.yml, .collabkit/link.yml), --cwd <dir>
+Install once: npm i -g collabkit-cli   (then every command is just "collab ...")
 `;
 
 function parseArgs(argv: string[]) {
@@ -46,15 +50,19 @@ function main(): number {
   const cwd = typeof flags.cwd === "string" ? flags.cwd : process.cwd();
   const as = typeof flags.as === "string" ? flags.as : undefined;
   switch (cmd) {
-    case undefined: case "help": case "--help": process.stdout.write(HELP); return 0;
+    case "help": case "--help": case "-h": process.stdout.write(HELP); return 0;
     case "version": case "--version": process.stdout.write(VERSION + "\n"); return 0;
     case "init": C.cmdInit(cwd, flags); return 0;
     case "link": C.cmdLink(cwd, pos, flags); return 0;
+    case "upgrade": C.cmdUpgrade(cwd, flags); return 0;
   }
-  const ctx = loadCtx(cwd, as, !["index", "check"].includes(cmd!));
-  switch (cmd) {
+  const ctx = loadCtx(cwd, as, !["index", "check", "sync"].includes(cmd ?? "next"));
+  switch (cmd ?? "next") {
     case "whoami": C.cmdWhoami(ctx); return 0;
     case "inbox": C.cmdInbox(ctx, flags); return 0;
+    case "next": case "n": C.cmdNext(ctx, flags); return 0;
+    case "sync": C.cmdSync(ctx); return 0;
+    case "ship": C.cmdSubmit(ctx, pos, { ...flags, ship: true }); return 0;
     case "open": C.cmdOpen(ctx, flags); return 0;
     case "reply": C.cmdReply(ctx, pos, flags); return 0;
     case "conclude": C.cmdConclude(ctx, pos); return 0;

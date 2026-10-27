@@ -5,7 +5,7 @@ import { CliError, VERSION, compareSemver, exists, readText } from "./util.js";
 export type Role = "spec-owner" | "implementer";
 export type Mode = "agent_push" | "human_commit";
 
-export interface Party { agent: string; human: string; mode: Mode; }
+export interface Party { agent: string; human: string; mode: Mode; github?: string; }
 
 export interface Config {
   schema_version: number;
@@ -68,6 +68,15 @@ export function identify(cfg: Config, id: string): Identity {
 
 export function allIds(cfg: Config): string[] {
   return Object.values(cfg.parties).flatMap((p) => [p.agent, p.human]);
+}
+
+/** GitHub login that may push on behalf of an id (the human of that id's party). */
+export function githubOf(cfg: Config, id: string): string | undefined {
+  for (const r of ["spec-owner", "implementer"] as Role[]) {
+    const p = cfg.parties[r];
+    if (p.agent === id || p.human === id) return p.github && !/^(CHANGE-ME|OWNER)?$/i.test(String(p.github)) ? String(p.github) : undefined;
+  }
+  return undefined;
 }
 
 export function counterpartAgent(cfg: Config, role: Role): string {

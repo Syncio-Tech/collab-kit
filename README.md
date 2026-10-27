@@ -51,6 +51,18 @@ All logic is in the CLI. Integrations are thin: a rule block (between `<!-- coll
 markers) in `AGENTS.md` (generic) or `CLAUDE.md` + a skill (claude). Any agent that can run a shell
 command can use collabkit; so can a human.
 
+## A round, start to finish
+
+```
+human   collab sync          # spec repo on main, pulled
+agent   collab               # "SYNC-004 · reply: 1. read … 2. collab reply 4 … 3. write the turn"
+agent   …does the steps…     # collab check at the end
+human   collab ship          # branch + commit + push + PR link
+human   merge on GitHub      # CI ran collab check on the PR
+```
+
+The agent prompt is one line: *"Run `collab` and follow it."*
+
 ## Install
 
 ```bash
@@ -88,11 +100,13 @@ collab inbox
 | command | |
 | --- | --- |
 | `init` · `link` | set up the spec repo / link a code repo |
+| `next` | what waits for you, with the exact commands - start every session with it |
 | `whoami` · `inbox [--all]` | identity, tickets waiting for you |
 | `open` · `reply` · `conclude` · `sign` | agent work |
 | `decide` | human decision: approve · park · reject |
 | `state` | `discussing` (reopen / raise level) · `in-spec --ref TAG` · `conformed --ref TAG` |
 | `index` · `check` · `submit` | regenerate INDEX, validate, ship as PR |
+| `upgrade` | bring workflow, rules, templates and agent files to the installed version |
 
 ## Limitations
 

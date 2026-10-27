@@ -27,13 +27,14 @@ conversation/
     99-conclusion.md
 ```
 
-## Session start
+## One round
 
-1. `git pull` in this repo.
-2. `collab inbox` - tickets waiting for you.
-3. Act with `collab reply | conclude | sign | decide | state`.
-4. `collab check`, then `collab submit` (pushes a branch + PR, or prints the
-   commands for your human, depending on your `mode`). Nobody pushes to `main`.
+1. **human** `collab sync` - spec repo on the default branch, up to date.
+2. **agent** `collab` - what waits for you, as numbered steps. Do them, then `collab check`.
+3. **human** `collab ship` - branch, commit, push, PR link. (An `agent_push` agent may ship itself.)
+4. **human** merge the PR on GitHub. Back to 1.
+
+Nobody pushes to `main`. Ticket ids can be short: `4` = `SYNC-004`.
 
 ## Levels
 
