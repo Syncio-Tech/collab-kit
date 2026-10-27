@@ -152,8 +152,12 @@ export function check(root: string, cfg: Config, opts: CheckOpts = {}): Diag[] {
     const changed = changedSince(root, base);
     const inConv = changed.filter((c) => c.path.startsWith(cfg.folder + "/"));
     const outside = changed.filter((c) => !c.path.startsWith(cfg.folder + "/"));
-    if (opts.pr && inConv.length && outside.length)
-      err("mixed-pr", "", `a conversation change must not touch files outside ${cfg.folder}/: ${outside.map((c) => c.path).join(", ")}`);
+    // Only ticket changes must stay inside conversation/. Setup and rule changes (init, upgrade, config,
+    // README, templates) legitimately touch .github/, agent files, etc. and go through code-owner review.
+    const ticketRe = new RegExp(`^${cfg.folder}/${cfg.id_prefix}-\\d{3,}/`);
+    const touchesTickets = inConv.some((c) => ticketRe.test(c.path));
+    if (opts.pr && touchesTickets && outside.length)
+      err("mixed-pr", "", `a ticket change must not touch files outside ${cfg.folder}/: ${outside.map((c) => c.path).join(", ")}`);
     for (const c of inConv) {
       if (c.status === "D") err("deleted", c.path, "conversation files are never deleted");
       if (c.path === `${cfg.folder}/config.yml` || c.path === `${cfg.folder}/README.md`) warn("rules-changed", c.path, "rules/config changed: needs spec-owner approval");

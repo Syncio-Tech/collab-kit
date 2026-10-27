@@ -127,3 +127,22 @@ test("NO_REQUIREMENT parks immediately; weekly cap", () => {
   assert.notEqual(r.code, 0); assert.match(r.out, /weekly cap/);
   ok(specA, "open", "--title", "prod is wrong", "--level", "T3", "--reason", "live", "--requirement", "human-a");
 });
+
+test("init PR may touch files outside conversation/; ticket PR may not", () => {
+  const T = mkdtempSync(join(tmpdir(), "collabkit-"));
+  const repo = join(T, "spec");
+  sh(T, "git", ["init", "-q", "-b", "main", repo]); id(repo, "A");
+  writeFileSync(join(repo, "README.md"), "spec\n");
+  gitc(repo, "add", "-A"); gitc(repo, "commit", "-qm", "base");
+  ok(repo, "init", "--integration", "generic,claude");
+  assert.match(ok(repo, "check", "--pr", "--base", "HEAD"), /OK|WARN/);
+  gitc(repo, "add", "-A"); gitc(repo, "commit", "-qm", "init");
+  ok(repo, "open", "--title", "x", "--level", "T2", "--reason", "r", "--requirement", "human-a");
+  writeFileSync(join(repo, "README.md"), "spec changed\n");
+  assert.match(ck(repo, "check", "--pr", "--base", "HEAD").out, /mixed-pr/);
+});
+
+test("piping into head does not crash", () => {
+  const r = spawnSync("sh", ["-c", `node ${CLI} help | head -1`], { encoding: "utf8" });
+  assert.equal(r.status, 0); assert.doesNotMatch(r.stderr, /EPIPE/);
+});
