@@ -23,6 +23,7 @@ export interface Config {
   areas: string[];
   /** manual (default) | semi: runners may call agents for conversation steps. There is no "auto". */
   autonomy: "manual" | "semi";
+  activity_log: boolean;
   remind_after_hours: Record<string, number>;
 }
 
@@ -47,6 +48,7 @@ export function loadConfig(specRoot: string): Config {
     forbidden_patterns: raw.forbidden_patterns ?? [],
     areas: raw.areas ?? [],
     autonomy: raw.autonomy === "semi" ? "semi" : "manual",
+    activity_log: raw.activity_log === true || raw.activity_log === "on",
     remind_after_hours: { T0: 72, T1: 72, T2: 24, T3: 2, ...(raw.remind_after_hours ?? {}) },
   };
   if (raw.autonomy !== undefined && !["manual", "semi"].includes(raw.autonomy))

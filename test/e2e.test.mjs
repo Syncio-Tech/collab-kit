@@ -16,7 +16,8 @@ const ck = (cwd, ...args) => {
 const ok = (cwd, ...args) => { const r = ck(cwd, ...args); assert.equal(r.code, 0, r.out); return r.out; };
 const gitc = (cwd, ...a) => sh(cwd, "git", a);
 const ckE = (cwd, env, ...args) => {
-  const r = spawnSync("node", [CLI, ...args], { cwd, encoding: "utf8", env: { ...process.env, ...env } });
+  const base = { ...process.env }; delete base.CLAUDECODE;           // tests run as a human unless a case says otherwise
+  const r = spawnSync("node", [CLI, ...args], { cwd, encoding: "utf8", env: { ...base, ...env } });
   return { code: r.status, out: r.stdout + r.stderr };
 };
 const okE = (cwd, env, ...args) => { const r = ckE(cwd, env, ...args); assert.equal(r.code, 0, r.out); return r.out; };
@@ -530,4 +531,47 @@ test("0.4.1: history flags rule bypasses (a turn edited after the fact, a state 
   const edited = ev.find((e) => e.type.endsWith("turn.edited"));
   assert.ok(edited, ev.map((e) => e.type).join()); assert.equal(edited.data.author, "agent-a");
   assert.ok(ev.some((e) => e.type.endsWith("state.reverted") && e.data.from === "discussing" && e.data.to === "open"));
+});
+
+test("0.4.2: activity log - commands and notes go to the collab/activity branch, without free text", () => {
+  const env = setup();
+  const { T, specA, specB, code } = env;
+  const H = { COLLAB_HOME: join(T, "home") };
+  const cf = join(specA, "conversation/config.yml");
+  // off by default: nothing recorded, note refuses
+  const off = ckE(specA, H, "note", "x");
+  assert.notEqual(off.code, 0); assert.match(off.out, /activity log is off/);
+  writeFileSync(cf, readFileSync(cf, "utf8").replace(/^activity_log: .*$/m, "activity_log: on"));
+  gitc(specA, "commit", "-qam", "activity on"); gitc(specA, "push", "-q", "origin", "main");
+  gitc(specB, "pull", "-q", "origin", "main");
+  // B: an agent opens a ticket (title is free text: must not be logged), a human runs a failing command, a note
+  okE(code, { ...H, CLAUDECODE: "1" }, "open", "--title", "SECRET customer ACME", "--level", "T2", "--reason", "r", "--requirement", "REQ-001");
+  const bad = ckE(code, H, "reply", "9");
+  assert.notEqual(bad.code, 0);
+  assert.match(okE(code, H, "note", "had to tell A about the new tag outside the channel"), /noted and pushed/);
+  // A: sync pushes A's pending events
+  okE(specA, H, "sync");
+  gitc(specA, "fetch", "-q", "origin", "+refs/heads/collab/activity:refs/remotes/origin/collab/activity");
+  const files = gitc(specA, "ls-tree", "--name-only", "origin/collab/activity").trim().split("\n").sort();
+  assert.deepEqual(files, ["implementer.jsonl", "spec-owner.jsonl"]);
+  const impl = gitc(specA, "show", "origin/collab/activity:implementer.jsonl");
+  assert.ok(!/SECRET|ACME/.test(impl), "free text leaked: " + impl);
+  const ev = impl.trim().split("\n").map((l) => JSON.parse(l));
+  const open = ev.find((e) => e.data.command === "open");
+  assert.equal(open.data.kind, "agent"); assert.equal(open.data.actor, "agent-b");
+  assert.ok(open.data.args.includes("--title") && open.data.args.includes("--level=T2"), open.data.args.join(" "));
+  const fail = ev.find((e) => e.data.command === "reply");
+  assert.equal(fail.data.exit, 1); assert.match(fail.data.error, /ticket 9 not found/); assert.equal(fail.data.kind, "human");
+  assert.ok(ev.some((e) => e.type === "tech.collabkit.activity.note" && /outside the channel/.test(e.data.text)));
+  // main is untouched by the activity branch
+  assert.equal(gitc(specA, "log", "--format=%s", "-1", "origin/main").trim(), "activity on");
+  // read back, pretty, and in viz
+  const pretty = okE(specA, H, "activity", "--pretty");
+  assert.match(pretty, /agent-b·agent\s+ok\s+open --title --level=T2/);
+  assert.match(pretty, /FAIL\s+reply 9\s+-> ticket 9 not found/);
+  assert.match(pretty, /NOTE\s+had to tell A/);
+  okE(specA, H, "viz");
+  const html = readFileSync(join(H.COLLAB_HOME, "viz", "demo.html"), "utf8");
+  const data = JSON.parse(/<script id="collab-data" type="application\/json">([\s\S]*?)<\/script>/.exec(html)[1]);
+  assert.ok(data.activity.length >= 4, String(data.activity.length));
 });

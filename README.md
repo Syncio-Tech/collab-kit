@@ -121,6 +121,13 @@ The log is CloudEvents 1.0 (one JSON object per line, `type` = `tech.collabkit.<
 reads CloudEvents or JSON lines can take it. Nothing is written by hand and nothing is committed: the history is
 git. Rule bypasses (a state moved back, a turn edited, a file removed) appear as anomalies with their commit.
 
+## Activity log (finding friction in collabkit)
+
+With `activity_log: on` in `conversation/config.yml`, every `collab` command and every `collab note "..."` is logged
+(who, human or agent, command and flag names, exit code, error - never ticket text) and pushed to the side branch
+`collab/activity` of the spec repo, which is never merged. `collab activity --pretty` lists it; `collab viz` shows
+failures, top errors and notes per party.
+
 ## Semi-auto
 
 The transport runs by itself; **decisions, spec changes and code stay human. There is no full auto.**

@@ -33,6 +33,9 @@ max_new_tickets_per_week: 5
 # conversation steps (reply, conclude, sign) and push them; CI merges them when check passes.
 # Decisions, spec changes and code are always human. There is no full auto.
 autonomy: manual
+# on: every collab command (name, flags, exit code, error - no ticket text) and `collab note` is logged to the side
+# branch collab/activity of this repo (never merged), to find friction in collabkit itself.
+activity_log: off
 # reminders (email via GitHub) when a ticket waits on someone longer than this
 remind_after_hours: { T3: 2, T2: 24, T1: 72, T0: 72 }
 

@@ -2,6 +2,7 @@
 import * as C from "./commands.js";
 import * as A from "./auto.js";
 import * as Hs from "./history.js";
+import { pushActivity, record, sanitizeArgs } from "./core/activity.js";
 import { loadCtx } from "./core/context.js";
 import { CliError, VERSION } from "./core/util.js";
 
@@ -31,7 +32,9 @@ Semi-auto (on your machine; decisions, spec and code stay human)
 
 History (rebuilt from git + the signals branch; CloudEvents 1.0)
   collab log [--pretty] [--ticket 4] [--since DATE] [--type decision.recorded] [--out FILE]
-  collab viz [--open] [--out FILE]  one HTML file: timeline, conversations, waiting time, decisions
+  collab viz [--open] [--out FILE]  one HTML file: timeline, conversations, waiting time, decisions, friction
+  collab note "text"                write down a friction point now (needs activity_log: on)
+  collab activity [--pretty] [push] what each party ran, failures, notes (branch collab/activity)
 
 Setup and maintenance
   collab init [--project N] [--integration generic,claude] [--spec-github LOGIN --impl-github LOGIN] ...
@@ -58,7 +61,31 @@ function parseArgs(argv: string[]) {
 }
 
 function main(): number {
-  const { cmd, pos, flags } = parseArgs(process.argv.slice(2));
+  const parsed = parseArgs(process.argv.slice(2));
+  const { cmd, pos, flags } = parsed;
+  const t0 = Date.now();
+  let code = 0, err: any;
+  try { code = run(parsed); return code; }
+  catch (e: any) { err = e; code = e instanceof CliError ? e.exitCode : 2; throw e; }
+  finally { trackActivity(cmd, pos, flags, code, Date.now() - t0, err); }
+}
+
+/** Record the command when the project turned the activity log on; push it on sync / ship / note. Never fails the command. */
+function trackActivity(cmd: string | undefined, pos: string[], flags: Record<string, string | boolean>, code: number, ms: number, err: any) {
+  const c = cmd ?? "next";
+  if (["help", "--help", "-h", "version", "--version", "notify", "activity", "note"].includes(c)) return;
+  if (c === "auto" && (pos[0] ?? "run") === "run") return;          // the runner's 1-minute tick
+  try {
+    const cwd = typeof flags.cwd === "string" ? flags.cwd : process.cwd();
+    const ctx = loadCtx(cwd, typeof flags.as === "string" ? flags.as : undefined, false);
+    if (!ctx.cfg.activity_log) return;
+    record(ctx.cfg, { type: "command", command: c, args: sanitizeArgs(c, pos, flags), exit: code, ms, error: err ? String(err.message ?? err) : undefined,
+      by: ctx.me?.id, role: ctx.me?.role });
+    if (code === 0 && ["sync", "ship", "submit"].includes(c)) pushActivity(ctx.specRoot, ctx.cfg);
+  } catch { /* the activity log is best effort */ }
+}
+
+function run({ cmd, pos, flags }: { cmd?: string; pos: string[]; flags: Record<string, string | boolean> }): number {
   const cwd = typeof flags.cwd === "string" ? flags.cwd : process.cwd();
   const as = typeof flags.as === "string" ? flags.as : undefined;
   if (flags.help === true && !cmd) { process.stdout.write(HELP); return 0; }
@@ -78,7 +105,7 @@ function main(): number {
       throw new CliError("collab auto register | install | now | run | uninstall");
     }
   }
-  const ctx = loadCtx(cwd, as, !["index", "check", "sync", "status", "notify", "log", "viz"].includes(cmd ?? "next"));
+  const ctx = loadCtx(cwd, as, !["index", "check", "sync", "status", "notify", "log", "viz", "activity", "note"].includes(cmd ?? "next"));
   switch (cmd ?? "next") {
     case "whoami": C.cmdWhoami(ctx); return 0;
     case "inbox": C.cmdInbox(ctx, flags); return 0;
@@ -87,6 +114,8 @@ function main(): number {
     case "status": A.cmdStatus(ctx); return 0;
     case "log": Hs.cmdLog(ctx, flags); return 0;
     case "viz": Hs.cmdViz(ctx, flags); return 0;
+    case "activity": Hs.cmdActivity(ctx, pos, flags); return 0;
+    case "note": Hs.cmdNote(ctx, pos); return 0;
     case "notify": return A.cmdNotify(ctx, flags);
     case "ship": C.cmdSubmit(ctx, pos, { ...flags, ship: true }); return 0;
     case "open": C.cmdOpen(ctx, flags); return 0;

@@ -503,7 +503,7 @@ export function cmdUpgrade(cwd: string, f: Flags) {
     // config: add keys introduced since the repo was set up, keep comments
     const cp = join(specRoot, CONFIG_REL);
     const doc = YAML.parseDocument(readText(cp));
-    const defaults: Record<string, any> = { max_turns_per_ticket: 6, max_points_per_ticket: 5, autonomy: "manual" };
+    const defaults: Record<string, any> = { max_turns_per_ticket: 6, max_points_per_ticket: 5, autonomy: "manual", activity_log: "off" };
     for (const [k, v] of Object.entries(defaults)) if (!doc.has(k)) doc.set(k, v);
     for (const r of ["spec-owner", "implementer"]) if (!doc.hasIn(["parties", r, "github"])) doc.setIn(["parties", r, "github"], f[`${r === "spec-owner" ? "spec" : "impl"}-github`] ?? "CHANGE-ME");
     write(cp, doc.toString(), "config keys");

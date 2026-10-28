@@ -1,6 +1,6 @@
 {
   "name": "collabkit-cli",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Agent-agnostic conversation channel between a spec owner and an implementer, living in the spec repo.",
   "type": "module",
   "bin": {

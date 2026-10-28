@@ -73,6 +73,15 @@ select, button { font: inherit; font-size: 13px; padding: 4px 8px; border-radius
   <h2>Human decisions</h2>
   <div class="panel"><table id="decisions"></table></div>
 
+  <section id="friction-wrap" hidden>
+    <h2>Friction · what each party ran (activity log)</h2>
+    <div class="panel"><table id="friction"></table></div>
+    <h2>Top errors</h2>
+    <div class="panel"><table id="errors"></table></div>
+    <h2>Notes</h2>
+    <div class="panel"><table id="notes"></table></div>
+  </section>
+
   <details><summary>All events (CloudEvents)</summary><div class="panel"><table id="raw"></table></div></details>
 </main>
 <script id="collab-data" type="application/json">/*__COLLAB_DATA__*/</script>
@@ -137,6 +146,7 @@ select, button { font: inherit; font-size: 13px; padding: 4px 8px; border-radius
   let selected = ids.find((id) => (tinfo[id] || {}).waiting_for && tinfo[id].waiting_for !== "none") || ids[ids.length - 1];
   function drawTimeline() {
     const svg = document.getElementById("timeline"); svg.innerHTML = "";
+    if (!ev.length) { svg.setAttribute("viewBox", "0 0 600 40"); svg.setAttribute("width", 600); svg.setAttribute("height", 40); el("text", { x: 8, y: 24, class: "m" }, svg, "No ticket history yet - it appears once tickets are merged."); return; }
     const L = 92, R = 16, top = 26, rowH = 30, W = Math.max(720, svg.parentElement.clientWidth - 24);
     const tev = ev.filter((e) => e.subject);
     const first = Math.min(...(tev.length ? tev : ev).map((e) => e.t)), t1 = Math.max(now, ...ev.map((e) => e.t));
@@ -258,6 +268,29 @@ select, button { font: inherit; font-size: 13px; padding: 4px 8px; border-radius
       (decisions.length ? decisions.map((e) => `<tr><td>${esc(fmt(e.t))}</td><td>${esc(e.subject)}</td><td>${esc(e.data.actor)}</td><td><b>${esc(e.data.decision)}</b></td><td>${esc(e.data.option ?? "")}</td><td>${esc(e.data.note ?? "")}</td></tr>`).join("") : `<tr><td colspan="6" class="sub">no decisions yet</td></tr>`);
     document.getElementById("raw").innerHTML = `<tr><th>time</th><th>type</th><th>subject</th><th>actor</th><th>commit</th></tr>` +
       ev.map((e) => `<tr${ANOM.includes(e.k) ? ' class="bad"' : ""}><td class="mono">${esc(e.time)}</td><td class="mono">${esc(e.k)}</td><td>${esc(e.subject ?? "")}</td><td>${esc(e.data.actor)}</td><td class="mono">${esc((e.data.commit || "").slice(0, 7))}</td></tr>`).join("");
+  }
+
+  // ---- friction (activity log)
+  const act = (D.activity || []).map((e) => ({ ...e, t: ts(e.time), k: short(e.type) }));
+  if (act.length) {
+    document.getElementById("friction-wrap").hidden = false;
+    const cmds = act.filter((e) => e.k === "activity.command"), notes = act.filter((e) => e.k === "activity.note");
+    const who = [...new Set(cmds.map((e) => e.data.actor))].sort();
+    let s = `<tr><th>who</th><th class="n">commands</th><th class="n">by agent</th><th class="n">by human</th><th class="n">failed</th><th class="n">check failed</th><th class="n">ship failed</th><th class="n">notes</th></tr>`;
+    for (const w of who) {
+      const c = cmds.filter((e) => e.data.actor === w), f = c.filter((e) => e.data.exit);
+      s += `<tr><td>${esc(w)}</td><td class="n">${c.length}</td><td class="n">${c.filter((e) => e.data.kind === "agent").length}</td><td class="n">${c.filter((e) => e.data.kind !== "agent").length}</td>` +
+        `<td class="n${f.length ? " bad" : ""}">${f.length}</td><td class="n">${f.filter((e) => e.data.command === "check").length}</td><td class="n">${f.filter((e) => e.data.command === "ship" || e.data.command === "submit").length}</td>` +
+        `<td class="n">${notes.filter((e) => e.data.actor === w).length}</td></tr>`;
+    }
+    document.getElementById("friction").innerHTML = s;
+    const errs = {};
+    for (const e of cmds.filter((e) => e.data.exit)) { const key = `${e.data.command}\u0000${(e.data.error || "exit " + e.data.exit).replace(/SYNC-\d+/g, "SYNC-n").slice(0, 140)}`; errs[key] = (errs[key] || 0) + 1; }
+    const rows = Object.entries(errs).sort((a, b) => b[1] - a[1]).slice(0, 12);
+    document.getElementById("errors").innerHTML = `<tr><th class="n">times</th><th>command</th><th>error</th></tr>` +
+      (rows.length ? rows.map(([k, n]) => { const [c, m] = k.split("\u0000"); return `<tr><td class="n">${n}</td><td class="mono">${esc(c)}</td><td>${esc(m)}</td></tr>`; }).join("") : `<tr><td colspan="3" class="sub">no failed commands</td></tr>`);
+    document.getElementById("notes").innerHTML = `<tr><th>when</th><th>who</th><th>note</th></tr>` +
+      (notes.length ? notes.map((e) => `<tr><td>${esc(fmt(e.t))}</td><td>${esc(e.data.actor)}</td><td>${esc(e.data.text)}</td></tr>`).join("") : `<tr><td colspan="3" class="sub">no notes yet — <code>collab note "..."</code></td></tr>`);
   }
 
   const pick = document.getElementById("pick");
