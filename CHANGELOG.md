@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.2 - 2026-10-28
+- **Activity log** (`activity_log: on` in config; default off): every `collab` command is recorded with who ran
+  it, whether a human or an agent (Claude Code's shell, the runner), flag names, exit code, duration and the first
+  line of the error. No ticket text, no free-text arguments, home paths shortened to `~`.
+  Kept on this machine first, pushed by `sync` / `ship` / `note` to the spec repo's side branch `collab/activity`
+  (one file per party, never merged, no PR).
+- `collab note "..."`: write down a friction point the moment it happens.
+- `collab activity [--pretty] [--since DATE]`, `collab activity push`.
+- `collab viz` adds a friction section: commands per party (agent vs human), failures, failed `check` / `ship`,
+  top errors, notes.
+- `upgrade` adds the `activity_log` key.
+
 ## 0.4.1 - 2026-10-27
 - **History, as a standard log.** `collab log` rebuilds every event from git history and the signals branch, as
   CloudEvents 1.0 JSON lines (`tech.collabkit.ticket.opened`, `turn.added`, `level.raised`, `ticket.concluded`,
