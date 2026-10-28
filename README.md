@@ -121,6 +121,13 @@ The log is CloudEvents 1.0 (one JSON object per line, `type` = `tech.collabkit.<
 reads CloudEvents or JSON lines can take it. Nothing is written by hand and nothing is committed: the history is
 git. Rule bypasses (a state moved back, a turn edited, a file removed) appear as anomalies with their commit.
 
+## Agents that must not run git
+
+Where an agent works in a folder it cannot clean up (an app's connected folder, a sandbox), set `COLLAB_NO_FETCH=1`
+and let it use only the commands that never call git: `open`, `reply`, `conclude`, `sign`, `state`, `decide`, `index`.
+`conversation/INDEX.md` shows who each ticket waits on. The human runs `sync`, `next`, `check` and `ship`.
+All collab git calls run without optional locks and without auto maintenance, so they do not leave lock files.
+
 ## Activity log (finding friction in collabkit)
 
 With `activity_log: on` in `conversation/config.yml`, every `collab` command and every `collab note "..."` is logged

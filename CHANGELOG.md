@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.3 - 2026-10-28
+- **No stray git lock files.** Every git call runs with `GIT_OPTIONAL_LOCKS=0`, so `check` / `next` / `inbox` never
+  take `.git/index.lock` (git refreshes the index opportunistically on `diff` / `status`). Every fetch, pull and
+  commit runs with `maintenance.auto=false` and `gc.auto=0` (no `objects/maintenance.lock`), and fetch does not write
+  `FETCH_HEAD`. Matters where a folder cannot delete files (e.g. an agent in a connected folder): a lock left behind
+  used to block the human's next commit.
+- **`COLLAB_NO_FETCH=1` / `--no-fetch`**: read commands (`next`, `inbox`, `status`, `log`, `viz`, `activity`) never
+  fetch; "behind origin" is computed from what is already known.
+- Commands that never call git, safe for an agent that must not touch git: `open`, `reply`, `conclude`, `sign`,
+  `state`, `decide`, `index`.
+- `collab --version` works (it ran `next` before).
+- `init` with `--spec-github` and `--impl-github` no longer tells you to replace CODEOWNERS handles, and drops the
+  "replace the handles" comment. `init` and `link` add `.claude/settings.local.json*` to `.gitignore`.
+
 ## 0.4.2 - 2026-10-28
 - **Activity log** (`activity_log: on` in config; default off): every `collab` command is recorded with who ran
   it, whether a human or an agent (Claude Code's shell, the runner), flag names, exit code, duration and the first

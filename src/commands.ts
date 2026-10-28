@@ -5,7 +5,7 @@ import { join, relative, resolve } from "node:path";
 import { Config, Mode, Role, counterpartAgent, loadConfig, CONFIG_REL } from "./core/config.js";
 import { Ctx, loadCtx } from "./core/context.js";
 import { parse, stringify } from "./core/frontmatter.js";
-import { changedSince, git, hasCommand, isRepo } from "./core/git.js";
+import { changedSince, fetchQuiet, git, hasCommand, isRepo } from "./core/git.js";
 import { indexPath, renderIndex } from "./core/indexmd.js";
 import { INTEGRATIONS, installIntegrations } from "./core/integrations.js";
 import { check, formatDiags, TRANSITIONS } from "./core/rules.js";
@@ -78,14 +78,16 @@ export function cmdInit(cwd: string, f: Flags) {
     writeIfAbsent(join(conv, "_templates", n), readText(templatePath("conversation", "_templates", n)), force, written, skipped);
   for (const w of WORKFLOWS) writeIfAbsent(join(root, ".github", "workflows", w), fill(readText(templatePath("github", w)), v), force, written, skipped);
   const co = join(root, ".github", "CODEOWNERS");
-  const snippet = fill(readText(templatePath("github", "CODEOWNERS.snippet")), v);
+  let snippet = fill(readText(templatePath("github", "CODEOWNERS.snippet")), v);
+  const handlesSet = v.spec_human_gh !== "CHANGE-ME" && v.impl_human_gh !== "CHANGE-ME";
+  if (handlesSet) snippet = snippet.replace(/^# collabkit: replace the handles.*$/m, "# collabkit: code owners (spec owner reviews rules; both sides own conversation/)");
   if (exists(co)) { writeText(join(root, ".github", "CODEOWNERS.collabkit"), snippet); written.push(join(root, ".github", "CODEOWNERS.collabkit") + "  (merge into your CODEOWNERS)"); }
   else { writeText(co, snippet); written.push(co); }
   const cfg = loadConfig(root);
   writeText(indexPath(root, cfg), renderIndex(root, cfg)); written.push(indexPath(root, cfg));
   const as = str(f, "as", v.spec_agent)!;
   writeText(join(root, ".collabkit", "local.yml"), YAML.stringify({ as }));
-  ensureGitignore(root, [".collabkit/local.yml", ".collabkit/link.yml"]);
+  ensureGitignore(root, [".collabkit/local.yml", ".collabkit/link.yml", ".claude/settings.local.json*"]);
   const integ = (str(f, "integration", "generic")!).split(",").map((s) => s.trim()).filter(Boolean);
   written.push(...installIntegrations(integ, { workRoot: root, specRoot: root, cfg, me: as, role: "spec-owner" }));
   writeManifest(root, written.filter((p) => !p.includes("(")));
@@ -94,7 +96,9 @@ export function cmdInit(cwd: string, f: Flags) {
   for (const p of skipped) log(`  = ${relative(root, p)} (exists, kept; --force to overwrite)`);
   if (!isRepo(root)) log("\nnote: this folder is not a git repo yet - `git init` before using submit.");
   if (v.spec_human_gh === "CHANGE-ME") log("\nnote: pass --spec-github/--impl-github (or edit parties.*.github in config.yml) so CI can verify who pushed what.");
-  log(`\nNext: replace GitHub handles in .github/CODEOWNERS, protect the default branch (require PR + code owner review),\ninvite the implementer, then commit these files.`);
+  log(handlesSet
+    ? `\nNext: commit these files, invite the implementer (${v.impl_human_gh}) to this repo, protect the default branch if your plan allows it.`
+    : `\nNext: replace GitHub handles in .github/CODEOWNERS, protect the default branch (require PR + code owner review),\ninvite the implementer, then commit these files.`);
 }
 
 const WORKFLOWS = ["collabkit-check.yml", "collabkit-automerge.yml", "collabkit-signals.yml"];
@@ -116,7 +120,7 @@ export function cmdLink(cwd: string, pos: string[], f: Flags) {
   const role: Role = cfg.parties["spec-owner"].agent === as || cfg.parties["spec-owner"].human === as ? "spec-owner" : "implementer";
   const specRel = relative(work, spec).split("\\").join("/");
   writeText(join(work, ".collabkit", "link.yml"), YAML.stringify({ spec_repo: specRel, as }));
-  ensureGitignore(work, [".collabkit/link.yml", ".collabkit/local.yml"]);
+  ensureGitignore(work, [".collabkit/link.yml", ".collabkit/local.yml", ".claude/settings.local.json*"]);
   const integ = (str(f, "integration", "generic")!).split(",").map((s) => s.trim()).filter(Boolean);
   const written = installIntegrations(integ, { workRoot: work, specRoot: spec, cfg, me: as, role });
   log(`linked ${relative(cwd, work) || "."} -> ${specRel} as ${as} (${role})`);
@@ -138,7 +142,7 @@ function freshness(root: string): string[] {
   const base = git(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], true).replace(/^origin\//, "") || "main";
   const branch = git(root, ["branch", "--show-current"], true);
   if (branch && branch !== base) out.push(`spec repo is on branch "${branch}", not "${base}". Before a new turn: git -C ${shp(root)} switch ${base} && git -C ${shp(root)} pull`);
-  try { execFileSync("git", ["fetch", "--quiet", "origin"], { cwd: root, stdio: "ignore", timeout: 8000 }); } catch { /* offline: use what we know */ }
+  fetchQuiet(root, [], 8000);                     // skipped with COLLAB_NO_FETCH=1: then "behind" uses what is already known
   const behind = Number(git(root, ["rev-list", "--count", `HEAD..origin/${base}`], true) || 0);
   if (behind > 0) out.push(`spec repo is ${behind} commit(s) behind origin/${base}: git -C ${shp(root)} pull`);
   return out;
@@ -380,7 +384,7 @@ export function cmdSubmit(ctx: Ctx, pos: string[], f: Flags) {
   }
   git(root, ["switch", "-c", branch]);
   git(root, ["add", ctx.cfg.folder]);
-  git(root, ["commit", "-m", msg, "-m", `Agent: ${m.id}`]);
+  git(root, ["-c", "maintenance.auto=false", "-c", "gc.auto=0", "commit", "-m", msg, "-m", `Agent: ${m.id}`]);
   log(`committed on ${branch}`);
   if (!hasRemote) { log("no `origin` remote: branch kept locally, no PR opened"); return; }
   git(root, ["push", "-u", "origin", branch]);
@@ -546,7 +550,7 @@ export function cmdSync(ctx: Ctx) {
   if (branch !== base) { git(root, ["switch", base]); log(`switched ${shp(root)} to ${base}`); }
   const hasRemote = git(root, ["remote"], true).split("\n").includes("origin");
   if (hasRemote) {
-    try { execFileSync("git", ["pull", "--ff-only", "--quiet"], { cwd: root, stdio: ["ignore", "ignore", "pipe"] }); }
+    try { execFileSync("git", ["-c", "maintenance.auto=false", "-c", "gc.auto=0", "pull", "--ff-only", "--quiet"], { cwd: root, stdio: ["ignore", "ignore", "pipe"] }); }
     catch (e: any) { throw new CliError(`git pull failed in ${shp(root)}: ${(e.stderr ?? e.message).toString().trim()}`); }
   }
   log(`${shp(root)} is on ${base}, up to date${hasRemote ? "" : " (no remote)"}.`);

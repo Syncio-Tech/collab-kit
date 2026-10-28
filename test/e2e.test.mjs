@@ -575,3 +575,44 @@ test("0.4.2: activity log - commands and notes go to the collab/activity branch,
   const data = JSON.parse(/<script id="collab-data" type="application\/json">([\s\S]*?)<\/script>/.exec(html)[1]);
   assert.ok(data.activity.length >= 4, String(data.activity.length));
 });
+
+test("0.4.3: no stray git locks - optional locks off, fetch without maintenance, COLLAB_NO_FETCH, --version", () => {
+  const env = setup();
+  const { T, specA, specB, code } = env;
+  // a git wrapper that records the environment and arguments of every call
+  const bin = join(T, "bin"); const logf = join(T, "git.log");
+  const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  execFileSync("mkdir", ["-p", bin]);
+  writeFileSync(join(bin, "git"), `#!/bin/sh\necho "$GIT_OPTIONAL_LOCKS|$*" >> "${logf}"\nexec "${realGit}" "$@"\n`);
+  execFileSync("chmod", ["+x", join(bin, "git")]);
+  const W = { PATH: `${bin}:${process.env.PATH}` };
+  okE(code, W, "next"); okE(code, W, "check"); okE(specA, W, "inbox"); okE(specA, W, "status");
+  const calls = readFileSync(logf, "utf8").trim().split("\n");
+  assert.ok(calls.length > 5, calls.join("\n"));
+  assert.ok(calls.every((l) => l.startsWith("0|")), "optional locks not off:\n" + calls.filter((l) => !l.startsWith("0|")).join("\n"));
+  const fetches = calls.filter((l) => / fetch /.test(" " + l.split("|")[1] + " "));
+  assert.ok(fetches.length >= 2, "expected fetches:\n" + calls.join("\n"));
+  assert.ok(fetches.every((l) => l.includes("maintenance.auto=false") && l.includes("gc.auto=0") && l.includes("--no-write-fetch-head")), fetches.join("\n"));
+  // COLLAB_NO_FETCH=1 / --no-fetch: no network, no ref writes from read commands
+  writeFileSync(logf, "");
+  okE(code, { ...W, COLLAB_NO_FETCH: "1" }, "next"); okE(specA, W, "inbox", "--no-fetch");
+  assert.ok(!/ fetch /.test(" " + readFileSync(logf, "utf8").replace(/\|/g, " ")), readFileSync(logf, "utf8"));
+  // a commit on the remote is not seen without fetch, and is seen with it
+  gitc(specB, "commit", "-q", "--allow-empty", "-m", "remote moved"); gitc(specB, "push", "-q", "origin", "main");
+  assert.doesNotMatch(okE(specA, { COLLAB_NO_FETCH: "1" }, "inbox"), /behind/);
+  assert.match(okE(specA, {}, "inbox"), /1 commit\(s\) behind/);
+  // --version works outside a repo
+  assert.match(ck(T, "--version").out.trim(), /^\d+\.\d+\.\d+$/);
+});
+
+test("0.4.3: init with both logins - no stale CODEOWNERS reminder, local Claude settings ignored", () => {
+  const T = mkdtempSync(join(tmpdir(), "collabkit-")); const r = join(T, "r");
+  execFileSync("git", ["init", "-q", "-b", "main", r]);
+  const out = ok(r, "init", "--project", "p", "--spec-github", "alice", "--impl-github", "bob");
+  assert.doesNotMatch(out, /replace GitHub handles/); assert.match(out, /invite the implementer \(bob\)/);
+  const co = readFileSync(join(r, ".github/CODEOWNERS"), "utf8");
+  assert.doesNotMatch(co, /replace the handles/); assert.match(co, /@alice @bob/);
+  assert.match(readFileSync(join(r, ".gitignore"), "utf8"), /^\.claude\/settings\.local\.json\*$/m);
+  const r2 = join(T, "r2"); execFileSync("git", ["init", "-q", "-b", "main", r2]);
+  assert.match(ok(r2, "init", "--project", "p"), /replace GitHub handles/);
+});
