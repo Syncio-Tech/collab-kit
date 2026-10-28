@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.1 - 2026-10-27
+- **History, as a standard log.** `collab log` rebuilds every event from git history and the signals branch, as
+  CloudEvents 1.0 JSON lines (`tech.collabkit.ticket.opened`, `turn.added`, `level.raised`, `ticket.concluded`,
+  `conclusion.signed`, `decision.recorded`, `state.changed`, `spec.released`, `pr.merged`, `reminder.sent`,
+  `runner.*`). Nobody writes the log by hand; each event names its actor and its commit. Bypasses show up as
+  anomalies: `state.reverted`, `turn.edited`, `file.removed`, `level.lowered`, `conclusion.edited`.
+  Filters: `--ticket 4`, `--since`, `--type`, `--pretty`, `--out`.
+- **`collab viz`**: one self-contained HTML file (no network, light/dark): timeline of every ticket coloured by
+  who it waited on, the conversation of one ticket across the five lanes, waiting hours per party, human decisions,
+  the raw events. Default `~/.collabkit/viz/<project>.html`; `--open`.
+- Claude integration adds the `collabkit-history` skill (draw and explain the history).
+- The runner records its own events (`runner.agent_called`, `runner.pushed`, `runner.discarded`,
+  `runner.skipped`) on the signals branch.
+- Fix: `collab auto install` keeps the PATH of the terminal that runs it (plus `~/.local/bin`), so launchd finds
+  `claude`. Re-run `collab auto install` after upgrading.
+- Fix: the runner passes `COLLABKIT_AS` to the agent.
+
 ## 0.4.0 - 2026-10-27
 - **Semi-auto** (`autonomy: semi` in config; default `manual`; full auto is refused). The transport runs by
   itself; decisions, spec changes and code stay human.

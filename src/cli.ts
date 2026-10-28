@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import * as C from "./commands.js";
 import * as A from "./auto.js";
+import * as Hs from "./history.js";
 import { loadCtx } from "./core/context.js";
 import { CliError, VERSION } from "./core/util.js";
 
@@ -27,6 +28,10 @@ Semi-auto (on your machine; decisions, spec and code stay human)
   collab auto install               every 15 min via launchd (low priority, own clone of the spec repo)
   collab auto now                   run once now and restart the 15-minute cycle
   collab status                     runners last seen, who each ticket waits on, seen/reminded
+
+History (rebuilt from git + the signals branch; CloudEvents 1.0)
+  collab log [--pretty] [--ticket 4] [--since DATE] [--type decision.recorded] [--out FILE]
+  collab viz [--open] [--out FILE]  one HTML file: timeline, conversations, waiting time, decisions
 
 Setup and maintenance
   collab init [--project N] [--integration generic,claude] [--spec-github LOGIN --impl-github LOGIN] ...
@@ -73,13 +78,15 @@ function main(): number {
       throw new CliError("collab auto register | install | now | run | uninstall");
     }
   }
-  const ctx = loadCtx(cwd, as, !["index", "check", "sync", "status", "notify"].includes(cmd ?? "next"));
+  const ctx = loadCtx(cwd, as, !["index", "check", "sync", "status", "notify", "log", "viz"].includes(cmd ?? "next"));
   switch (cmd ?? "next") {
     case "whoami": C.cmdWhoami(ctx); return 0;
     case "inbox": C.cmdInbox(ctx, flags); return 0;
     case "next": case "n": C.cmdNext(ctx, flags); return 0;
     case "sync": C.cmdSync(ctx); return 0;
     case "status": A.cmdStatus(ctx); return 0;
+    case "log": Hs.cmdLog(ctx, flags); return 0;
+    case "viz": Hs.cmdViz(ctx, flags); return 0;
     case "notify": return A.cmdNotify(ctx, flags);
     case "ship": C.cmdSubmit(ctx, pos, { ...flags, ship: true }); return 0;
     case "open": C.cmdOpen(ctx, flags); return 0;

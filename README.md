@@ -109,6 +109,17 @@ collab inbox
 | `upgrade` | bring workflow, rules, templates and agent files to the installed version |
 | `auto register` · `auto install` · `auto now` | semi-auto runner on your machine (below) |
 | `status` | runners last seen, who each ticket waits on, seen / reminded |
+| `log` · `viz` | the history as CloudEvents / as one HTML file |
+
+## History
+
+```sh
+collab log --pretty            # every event, rebuilt from git: who, what, which commit
+collab viz --open              # one HTML file: timeline, conversations, waiting time, decisions
+```
+The log is CloudEvents 1.0 (one JSON object per line, `type` = `tech.collabkit.<noun>.<verb>`), so any tool that
+reads CloudEvents or JSON lines can take it. Nothing is written by hand and nothing is committed: the history is
+git. Rule bypasses (a state moved back, a turn edited, a file removed) appear as anomalies with their commit.
 
 ## Semi-auto
 

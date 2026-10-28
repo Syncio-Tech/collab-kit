@@ -40,6 +40,8 @@ export function installIntegrations(list: string[], v: IntegrationVars): string[
       upsertBlock(f, block, "# CLAUDE.md"); written.push(f);
       const s = join(v.workRoot, ".claude", "skills", "collabkit", "SKILL.md");
       writeText(s, fill(readText(templatePath("integrations", "claude", "SKILL.md")), vars)); written.push(s);
+      const sv = join(v.workRoot, ".claude", "skills", "collabkit-history", "SKILL.md");
+      writeText(sv, fill(readText(templatePath("integrations", "claude", "history-SKILL.md")), vars)); written.push(sv);
     } else {
       throw new Error(`unknown integration "${name}" (available: ${INTEGRATIONS.join(", ")})`);
     }
