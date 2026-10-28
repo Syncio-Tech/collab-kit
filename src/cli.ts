@@ -41,7 +41,7 @@ Setup and maintenance
   collab link <spec-repo-path> [--as agent-b] [--integration generic,claude]
   collab upgrade [--dry-run] [--force]
 
-Global: --as <id> (or COLLAB_AS, .collabkit/local.yml, .collabkit/link.yml), --cwd <dir>
+Global: --as <id> (or COLLAB_AS, .collabkit/local.yml, .collabkit/link.yml), --cwd <dir>, --no-fetch (or COLLAB_NO_FETCH=1)
 Install once: npm i -g collabkit-cli   (then every command is just "collab ...")
 `;
 
@@ -61,7 +61,11 @@ function parseArgs(argv: string[]) {
 }
 
 function main(): number {
+  // read commands must never leave .git/index.lock behind (git status/diff refresh the index opportunistically)
+  if (process.env.GIT_OPTIONAL_LOCKS === undefined) process.env.GIT_OPTIONAL_LOCKS = "0";
   const parsed = parseArgs(process.argv.slice(2));
+  if (parsed.flags["no-fetch"] === true) process.env.COLLAB_NO_FETCH = "1";
+  if (parsed.flags.version === true && !parsed.cmd) { process.stdout.write(VERSION + "\n"); return 0; }
   const { cmd, pos, flags } = parsed;
   const t0 = Date.now();
   let code = 0, err: any;

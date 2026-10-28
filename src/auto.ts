@@ -158,7 +158,7 @@ function tick(ws: Workspace, c: AutoConfig, st: AutoState, t: number) {
   // 1. cheap check: only fetch when main moved
   const remoteMain = (git(dir, ["ls-remote", "origin", "refs/heads/main"], true).split(/\s/)[0]) || "";
   const localMain = git(dir, ["rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"], true);
-  if (remoteMain && remoteMain !== localMain) sh(dir, ["fetch", "--quiet", "origin"]);
+  if (remoteMain && remoteMain !== localMain) sh(dir, ["-c", "maintenance.auto=false", "-c", "gc.auto=0", "fetch", "--quiet", "origin"]);
   // the clone is ours: always start from a clean origin/main
   sh(dir, ["switch", "--quiet", "-C", "main", "origin/main"]);
   sh(dir, ["reset", "--quiet", "--hard", "origin/main"]);

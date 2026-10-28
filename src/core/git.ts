@@ -37,6 +37,18 @@ export function changedSince(cwd: string, ref: string): { path: string; status: 
   return out;
 }
 
+/** Fetch without side jobs (no auto maintenance / gc, so no stray maintenance.lock). False when skipped or offline. */
+export function fetchQuiet(cwd: string, refspec: string[] = [], timeout = 15000): boolean {
+  if (noFetch()) return false;
+  try {
+    execFileSync("git", ["-c", "maintenance.auto=false", "-c", "gc.auto=0", "fetch", "--quiet", "--no-write-fetch-head", "origin", ...refspec],
+      { cwd, stdio: "ignore", timeout });
+    return true;
+  } catch { return false; }
+}
+/** COLLAB_NO_FETCH=1 (or --no-fetch): never touch the network or .git refs from read commands. */
+export function noFetch(): boolean { return process.env.COLLAB_NO_FETCH === "1"; }
+
 export function hasCommand(cmd: string): boolean {
   try { execFileSync(cmd, ["--version"], { stdio: "ignore" }); return true; } catch { return false; }
 }

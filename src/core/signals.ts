@@ -1,7 +1,7 @@
 // The signals branch: heartbeat / ack / remind. Informational only - ticket state lives in conversation/ on main.
 import { execFileSync } from "node:child_process";
 import { Config, githubOf } from "./config.js";
-import { git, isRepo } from "./git.js";
+import { fetchQuiet, git, isRepo } from "./git.js";
 import { listTickets } from "./ticket.js";
 
 export const SIGNALS_BRANCH = "collab/signals";
@@ -96,7 +96,7 @@ export function writeBranch(root: string, branch: string, updates: Record<string
 
 export function fetchBranch(root: string, branch: string): void {
   if (!hasRemote(root)) return;
-  try { execFileSync("git", ["fetch", "--quiet", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`], { cwd: root, stdio: "ignore", timeout: 15000 }); } catch { /* no branch yet / offline */ }
+  fetchQuiet(root, [`+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
 }
 
 /** Raw text of every file on a side branch (tip), keyed by path. */
