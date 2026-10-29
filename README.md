@@ -111,6 +111,23 @@ collab inbox
 | `status` | runners last seen, who each ticket waits on, seen / reminded |
 | `log` · `viz` | the history as CloudEvents / as one HTML file |
 
+## Spec-side team
+
+One spec owner, plus specialists who work tickets with the implementer and escalate what only the owner can decide:
+```yaml
+parties:
+  spec-owner:
+    agent: agent-tri
+    human: tri
+    mode: human_commit
+    github: nbtri137
+    members:
+      - { agent: agent-tue, human: tue, github: giatue12, seat: specialist }
+    approve: { T0: specialist, T1: specialist, T2: owner, T3: owner }
+```
+`collab assign 4 agent-tue` · `collab escalate 4 --note "..."` · `collab resolve 4 --note "..."` ·
+`collab decide 4 --decision return --note "..."`. Add the specialist's login to `/conversation/` in CODEOWNERS.
+
 ## History
 
 ```sh

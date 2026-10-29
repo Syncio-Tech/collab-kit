@@ -18,7 +18,12 @@ The loop (one round)
 Ticket work (IDs can be short: 4 = SYNC-004)
   collab open --title T --level T0..T3 --reason R --requirement R|NO_REQUIREMENT [--spec-ref REF]
   collab reply 4 [--points P1,P2]       collab conclude 4       collab sign 4
-  collab decide 4=A [5=B ...] --decision approve|park|reject     (humans)
+  collab decide 4=A [5=B ...] --decision approve|park|reject|return  (humans; return = send an agreed conclusion back)
+
+Spec-side team (config: parties.spec-owner.members)
+  collab assign 4 agent-tue         spec owner gives a ticket to a spec-side agent
+  collab escalate 4 --note "..."    specialist: a point only the spec owner can decide
+  collab resolve 4 --note "..."     spec owner answers; the ticket goes back (--assign <agent> to hand it over)
   collab state 4 discussing|in-spec|conformed [--level Tn] [--ref TAG]
 
 Look
@@ -127,6 +132,9 @@ function run({ cmd, pos, flags }: { cmd?: string; pos: string[]; flags: Record<s
     case "conclude": C.cmdConclude(ctx, pos); return 0;
     case "sign": C.cmdSign(ctx, pos); return 0;
     case "decide": C.cmdDecide(ctx, pos, flags); return 0;
+    case "assign": C.cmdAssign(ctx, pos); return 0;
+    case "escalate": C.cmdEscalate(ctx, pos, flags); return 0;
+    case "resolve": C.cmdResolve(ctx, pos, flags); return 0;
     case "state": C.cmdState(ctx, pos, flags); return 0;
     case "index": C.cmdIndex(ctx); return 0;
     case "check": return C.cmdCheck(ctx, flags);

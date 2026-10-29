@@ -616,3 +616,107 @@ test("0.4.3: init with both logins - no stale CODEOWNERS reminder, local Claude 
   const r2 = join(T, "r2"); execFileSync("git", ["init", "-q", "-b", "main", r2]);
   assert.match(ok(r2, "init", "--project", "p"), /replace GitHub handles/);
 });
+
+// ---------------------------------------------------------------- 0.5 spec-side team
+function teamRepo() {
+  const repo = soloRepo();
+  const f = join(repo, "conversation/config.yml");
+  let t = readFileSync(f, "utf8");
+  t = t.replace(/(  spec-owner:\n(?:    .*\n)*?    github: )\S+/, "$1alogin");
+  t = t.replace(/(  implementer:\n(?:    .*\n)*?    github: )\S+/, "$1blogin");
+  t = t.replace(/(  spec-owner:\n)/, "$1    members:\n      - { agent: agent-t, human: human-t, github: tlogin, seat: specialist }\n");
+  writeFileSync(f, t);
+  gitc(repo, "add", "-A"); gitc(repo, "commit", "-qm", "init team");
+  return repo;
+}
+const tk = (repo, id) => readFileSync(join(repo, "conversation", id, "ticket.md"), "utf8");
+const wait = (repo, id) => /^waiting_for: (\S+)$/m.exec(tk(repo, id))[1];
+
+test("0.5: spec owner assigns, specialist works with dev, escalates, owner resolves, returns, approves", () => {
+  const repo = teamRepo();
+  assert.match(ok(repo, "whoami", "--as", "agent-t"), /spec-owner \(specialist\)/);
+  const id = openFilled(repo, "T2", "agent-b");
+  assert.equal(wait(repo, id), "agent-a");                                     // unassigned = the owner's
+  assert.match(ok(repo, "next", "--as", "human-a"), new RegExp(`not assigned yet[\\s\\S]*collab assign ${id}`));
+  let r = ck(repo, "reply", id, "--as", "agent-t");
+  assert.notEqual(r.code, 0); assert.match(r.out, /assigned to agent-a/);
+  r = ck(repo, "assign", id, "agent-t", "--as", "human-t");
+  assert.notEqual(r.code, 0); assert.match(r.out, /only the spec owner/);
+  ok(repo, "assign", id, "agent-t", "--as", "human-a");
+  const commit = (m) => { gitc(repo, "add", "-A"); gitc(repo, "commit", "-qm", m); };
+  commit("assign");
+  assert.equal(wait(repo, id), "agent-t");
+  assert.match(readFileSync(join(repo, "conversation/INDEX.md"), "utf8"), /\| assignee \|[\s\S]*\| agent-t \| agent-t \|/);
+  // specialist <-> dev
+  ok(repo, "reply", id, "--points", "P1", "--as", "agent-t"); fillTurn(lastTurn(join(repo, "conversation", id)));
+  assert.equal(wait(repo, id), "agent-b");
+  ok(repo, "reply", id, "--points", "P1", "--as", "agent-b"); fillTurn(lastTurn(join(repo, "conversation", id)));
+  assert.equal(wait(repo, id), "agent-t");                                     // back to the assignee, not the owner
+  // escalate -> owner resolves -> back to the specialist
+  assert.notEqual(ck(repo, "escalate", id, "--as", "agent-t").code, 0);       // needs a note
+  ok(repo, "escalate", id, "--note", "P1: keep 90 or 180 days?", "--as", "agent-t"); commit("escalate");
+  assert.equal(wait(repo, id), "human-a");
+  assert.match(ck(repo, "reply", id, "--as", "agent-t").out, /escalated/);
+  assert.match(ok(repo, "next", "--as", "human-a"), /escalated by agent-t: "P1: keep 90 or 180 days\?"[\s\S]*collab resolve/);
+  assert.notEqual(ck(repo, "resolve", id, "--note", "x", "--as", "human-t").code, 0);
+  ok(repo, "resolve", id, "--note", "P1: 90 days", "--as", "human-a"); commit("resolve");
+  assert.equal(wait(repo, id), "agent-t");
+  assert.match(ok(repo, "next", "--as", "agent-t"), /answered your escalation: "P1: 90 days"/);
+  // caps count per side: the spec side has used 1 turn on P1; one more is allowed, then none
+  ok(repo, "reply", id, "--points", "P1", "--as", "agent-t"); fillTurn(lastTurn(join(repo, "conversation", id)));
+  ok(repo, "reply", id, "--points", "P1", "--as", "agent-b"); fillTurn(lastTurn(join(repo, "conversation", id)));
+  r = ck(repo, "reply", id, "--points", "P1", "--as", "agent-a");             // the owner's agent is the same side
+  assert.notEqual(r.code, 0); assert.match(r.out, /your side already used 2\/2/);
+  // conclude, both sides sign -> T2 waits on the owner
+  ok(repo, "conclude", id, "--as", "agent-t"); fillConclusion(join(repo, "conversation", id, "99-conclusion.md"));
+  ok(repo, "sign", id, "--as", "agent-t"); ok(repo, "sign", id, "--as", "agent-b");
+  assert.match(tk(repo, id), /state: agreed/); assert.equal(wait(repo, id), "human-a");
+  r = ck(repo, "decide", id, "--decision", "approve", "--as", "human-t");
+  assert.notEqual(r.code, 0); assert.match(r.out, /may not decide T2/);
+  // owner returns it: signatures void, back to the specialist
+  assert.notEqual(ck(repo, "decide", id, "--decision", "return", "--as", "human-a").code, 0); // needs a reason
+  ok(repo, "decide", id, "--decision", "return", "--note", "add the archive rule", "--as", "human-a"); commit("return");
+  assert.match(tk(repo, id), /state: discussing/); assert.equal(wait(repo, id), "agent-t");
+  assert.doesNotMatch(readFileSync(join(repo, "conversation", id, "99-conclusion.md"), "utf8"), /agent-b:\n\s+at:/);
+  assert.match(ok(repo, "check"), /OK|WARN/);
+  // re-sign, owner approves, the assignee changes the spec
+  ok(repo, "sign", id, "--as", "agent-t"); ok(repo, "sign", id, "--as", "agent-b");
+  ok(repo, "decide", id, "--decision", "approve", "--option", "A", "--as", "human-a");
+  assert.equal(wait(repo, id), "agent-t");
+  assert.match(ok(repo, "next", "--as", "agent-t"), /change the spec/);
+  ok(repo, "state", id, "in-spec", "--ref", "v0.2.0", "--as", "agent-t");
+  assert.doesNotMatch(ok(repo, "check"), /ERROR/);
+  // history
+  gitc(repo, "add", "-A"); gitc(repo, "commit", "-qm", "rest", "-m", "Agent: agent-t");
+  const types = ok(repo, "log").trim().split("\n").map((l) => JSON.parse(l).type.replace("tech.collabkit.", ""));
+  for (const k of ["ticket.assigned", "ticket.escalated", "escalation.resolved"]) assert.ok(types.includes(k), k + ": " + types.join(","));
+  const decs = ok(repo, "log", "--type", "decision.recorded").trim().split("\n").map((l) => JSON.parse(l).data.decision);
+  assert.deepEqual(decs, ["return", "approve"]);
+});
+
+test("0.5: a specialist may decide (and change the spec for) T1 but not T2; identity per member; old configs unchanged", () => {
+  const repo = teamRepo();
+  const base = gitc(repo, "rev-parse", "HEAD").trim();
+  const id = openFilled(repo, "T1", "agent-b");
+  ok(repo, "assign", id, "agent-t", "--as", "human-a");
+  ok(repo, "reply", id, "--points", "P1", "--as", "agent-t"); agreeTurn(lastTurn(join(repo, "conversation", id)));
+  ok(repo, "conclude", id, "--as", "agent-b"); fillConclusion(join(repo, "conversation", id, "99-conclusion.md"));
+  ok(repo, "sign", id, "--as", "agent-b"); ok(repo, "sign", id, "--as", "agent-t");
+  ok(repo, "decide", id, "--decision", "approve", "--as", "human-t");          // T1: approve table says specialist
+  ok(repo, "state", id, "in-spec", "--ref", "v0.3.0", "--as", "agent-t");
+  assert.doesNotMatch(ok(repo, "check"), /ERROR/);
+  // the specialist's turn must be pushed by the specialist's login
+  gitc(repo, "add", "-A"); gitc(repo, "commit", "-qm", "t1");
+  let r = ck(repo, "check", "--base", base, "--actor", "alogin");
+  assert.notEqual(r.code, 0); assert.match(r.out, /turn by agent-t was pushed by @alogin; only @tlogin/);
+  // hand-edit a T2 approval by the specialist: check catches it
+  const id2 = openFilled(repo, "T2", "agent-b");
+  const tf = join(repo, "conversation", id2, "ticket.md");
+  writeFileSync(tf, readFileSync(tf, "utf8").replace("state: open", "state: parked").replace(/^waiting_for: .*$/m, "waiting_for: none") + "");
+  writeFileSync(tf, readFileSync(tf, "utf8").replace(/^---\n/, "---\ndecision: { by: human-t, decision: park, at: 2026-10-29T10:00+07:00 }\n"));
+  ok(repo, "index");
+  assert.match(ck(repo, "check").out, /decision-wrong-human.*human-t may not decide T2/);
+  // a config without members behaves as before (covered by the earlier tests); unknown assignee is caught
+  writeFileSync(tf, readFileSync(tf, "utf8").replace(/^---\n/, "---\nassignee: agent-x\n")); ok(repo, "index");
+  assert.match(ck(repo, "check").out, /assignee `agent-x` is not a spec-side agent/);
+});

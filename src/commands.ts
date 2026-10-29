@@ -2,7 +2,7 @@ import YAML from "yaml";
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { Config, Mode, Role, counterpartAgent, loadConfig, CONFIG_REL } from "./core/config.js";
+import { Config, Mode, Role, approverOf, specApproverOf, canChangeSpec, canDecide, counterpartAgent, identify, loadConfig, sideAgent, sideOf, CONFIG_REL } from "./core/config.js";
 import { Ctx, loadCtx } from "./core/context.js";
 import { parse, stringify } from "./core/frontmatter.js";
 import { changedSince, fetchQuiet, git, hasCommand, isRepo } from "./core/git.js";
@@ -52,9 +52,13 @@ function save(ctx: Ctx, t: Ticket) {
 
 function me(ctx: Ctx) { if (!ctx.me) throw new CliError("identity required (--as)"); return ctx.me; }
 
-function decider(cfg: Config, level: string): string {
-  return levelIdx(level) >= 2 ? cfg.parties["spec-owner"].human : cfg.parties["implementer"].human;
+/** A spec-side agent may work a ticket only when it is assigned to it (unassigned = the owner's). The owner may always. */
+function mayWork(ctx: Ctx, m: { id: string; role: Role; kind: string; seat: string }, d: Record<string, any>, t: { id: string }) {
+  if (m.role !== "spec-owner" || m.kind !== "agent" || m.seat === "owner") return;
+  if (sideAgent(ctx.cfg, "spec-owner", d) !== m.id)
+    throw new CliError(`${t.id} is assigned to ${sideAgent(ctx.cfg, "spec-owner", d)}, not ${m.id}. The spec owner assigns: \`collab assign ${t.id} ${m.id}\``);
 }
+const openEscalation = (d: Record<string, any>) => (Array.isArray(d.escalations) ? d.escalations : []).find((e: any) => !e.resolved_at);
 
 // ---------------------------------------------------------------- init / link
 export function cmdInit(cwd: string, f: Flags) {
@@ -117,7 +121,7 @@ export function cmdLink(cwd: string, pos: string[], f: Flags) {
   if (!exists(join(spec, CONFIG_REL))) throw new CliError(`${spec} has no ${CONFIG_REL}`);
   const cfg = loadConfig(spec);
   const as = str(f, "as", cfg.parties.implementer.agent)!;
-  const role: Role = cfg.parties["spec-owner"].agent === as || cfg.parties["spec-owner"].human === as ? "spec-owner" : "implementer";
+  const role: Role = sideOf(cfg, as) ?? "implementer";
   const specRel = relative(work, spec).split("\\").join("/");
   writeText(join(work, ".collabkit", "link.yml"), YAML.stringify({ spec_repo: specRel, as }));
   ensureGitignore(work, [".collabkit/link.yml", ".collabkit/local.yml", ".claude/settings.local.json*"]);
@@ -130,7 +134,7 @@ export function cmdLink(cwd: string, pos: string[], f: Flags) {
 // ---------------------------------------------------------------- reading
 export function cmdWhoami(ctx: Ctx) {
   const m = me(ctx);
-  log(`${m.id}  ${m.kind}  ${m.role}  mode=${ctx.cfg.parties[m.role].mode}`);
+  log(`${m.id}  ${m.kind}  ${m.role}${m.seat === "specialist" ? " (specialist)" : ""}  mode=${ctx.cfg.parties[m.role].mode}`);
   log(`spec repo: ${ctx.specRoot}`);
   if (ctx.workRoot !== ctx.specRoot) log(`work repo: ${ctx.workRoot}`);
 }
@@ -181,6 +185,7 @@ export function cmdOpen(ctx: Ctx, f: Flags) {
   const doc = parse(text);
   if (parked) doc.data.state = "parked";
   if (str(f, "area")) doc.data.area = str(f, "area");
+  if (m.role === "spec-owner" && m.kind === "agent" && ctx.cfg.parties["spec-owner"].members.length > 1) doc.data.assignee = m.id;
   const file = join(convDir(ctx.specRoot, ctx.cfg), id, "ticket.md");
   writeText(file, stringify(doc));
   writeText(indexPath(ctx.specRoot, ctx.cfg), renderIndex(ctx.specRoot, ctx.cfg));
@@ -193,6 +198,10 @@ export function cmdReply(ctx: Ctx, pos: string[], f: Flags) {
   const t = getTicket(ctx, pos[0]);
   const st = t.doc.data.state as State;
   if (["rejected", "conformed"].includes(st)) throw new CliError(`${t.id} is ${st}; reopen with \`collab state ${t.id} discussing\` first`);
+  mayWork(ctx, m, t.doc.data, t);
+  const esc = openEscalation(t.doc.data);
+  if (esc && m.seat !== "owner") throw new CliError(`${t.id} is escalated to ${ctx.cfg.parties["spec-owner"].human} (${esc.note ?? "no note"}); wait for \`collab resolve\``);
+  const side = (id: string) => sideOf(ctx.cfg, id);
   const points = (str(f, "points", "P1")!).split(",").map((s) => s.trim()).filter(Boolean);
   if (t.turns.length >= ctx.cfg.max_turns_per_ticket)
     throw new CliError(`${t.id} already has ${t.turns.length} turns (max ${ctx.cfg.max_turns_per_ticket}). Run \`collab conclude ${t.id}\` and record the open points as options for the human.`);
@@ -201,15 +210,15 @@ export function cmdReply(ctx: Ctx, pos: string[], f: Flags) {
   if (known.size > ctx.cfg.max_points_per_ticket)
     throw new CliError(`${t.id} would have ${known.size} points (max ${ctx.cfg.max_points_per_ticket}). Open a separate ticket for the new topic.`);
   const lastTurn = t.turns.at(-1);
-  if (lastTurn && lastTurn.by !== m.id) {
+  if (lastTurn && side(lastTurn.by) !== m.role) {
     const st = Object.values(stances(lastTurn.doc.body));
     if (st.length && st.every((x) => x === "agree"))
       throw new CliError(`the last turn agrees on every point. Do not reply: \`collab conclude ${t.id}\`, write the conclusion, then \`collab sign ${t.id}\`.`);
   }
   for (const p of points) {
-    const used = t.turns.filter((x) => x.by === m.id && (x.doc.data.points ?? []).includes(p)).length;
+    const used = t.turns.filter((x) => side(x.by) === m.role && (x.doc.data.points ?? []).includes(p)).length;
     if (used >= ctx.cfg.max_turns_per_point)
-      throw new CliError(`you already used ${used}/${ctx.cfg.max_turns_per_point} turns on ${p}. Escalate: \`collab state ${t.id} discussing --level T2\` and record the options in the conclusion.`);
+      throw new CliError(`your side already used ${used}/${ctx.cfg.max_turns_per_point} turns on ${p}. Escalate: \`collab state ${t.id} discussing --level T2\` and record the options in the conclusion.`);
   }
   const n = (t.turns.at(-1)?.n ?? 0) + 1;
   if (n >= 99) throw new CliError("turn limit of the folder reached");
@@ -218,7 +227,7 @@ export function cmdReply(ctx: Ctx, pos: string[], f: Flags) {
   const sections = points.map((p) => `### ${p} · <name>\n- agree | disagree | need data\n- reason + evidence\n`).join("\n");
   writeText(file, fill(readText(templatePath("conversation", "_templates", "turn.md")), { id: t.id, turn: nn, me: m.id, now: nowIso(), points: points.join(", "), point_sections: sections }));
   if (st === "open" || st === "parked" && f.reopen === true) t.doc.data.state = "discussing";
-  t.doc.data.waiting_for = str(f, "waiting-for", m.kind === "agent" ? counterpartAgent(ctx.cfg, m.role) : t.doc.data.waiting_for);
+  t.doc.data.waiting_for = str(f, "waiting-for", m.kind === "agent" ? counterpartAgent(ctx.cfg, m.role, t.doc.data) : t.doc.data.waiting_for);
   t.turns.push({ n, by: m.id, file, doc: parse(readText(file)) });
   save(ctx, t);
   log(`turn ${nn} -> ${relative(process.cwd(), file)}; waiting for ${t.doc.data.waiting_for}`);
@@ -228,9 +237,10 @@ export function cmdReply(ctx: Ctx, pos: string[], f: Flags) {
 export function cmdConclude(ctx: Ctx, pos: string[]) {
   const m = me(ctx);
   const t = getTicket(ctx, pos[0]);
+  mayWork(ctx, m, t.doc.data, t);
   if (!exists(t.conclusionFile)) writeText(t.conclusionFile, fill(readText(templatePath("conversation", "_templates", "conclusion.md")), { id: t.id }));
   if (t.doc.data.state === "open") t.doc.data.state = "discussing";
-  if (m.kind === "agent") t.doc.data.waiting_for = counterpartAgent(ctx.cfg, m.role);
+  if (m.kind === "agent") t.doc.data.waiting_for = counterpartAgent(ctx.cfg, m.role, t.doc.data);
   save(ctx, t);
   log(`conclusion -> ${relative(process.cwd(), t.conclusionFile)}. Write it, then \`collab sign ${t.id}\`.`);
 }
@@ -240,6 +250,7 @@ export function cmdSign(ctx: Ctx, pos: string[]) {
   if (m.kind !== "agent") throw new CliError("only agents sign the conclusion; humans use `collab decide`");
   const t = getTicket(ctx, pos[0]);
   if (!exists(t.conclusionFile)) throw new CliError(`no ${CONCLUSION}; run \`collab conclude ${t.id}\``);
+  mayWork(ctx, m, t.doc.data, t);
   const c = parse(readText(t.conclusionFile));
   if (/^## Conclusion\s*\n\s*(## |$)/m.test(c.body)) throw new CliError(`write the conclusion in ${CONCLUSION} before signing`);
   const h = conclusionHash(c.body);
@@ -247,12 +258,13 @@ export function cmdSign(ctx: Ctx, pos: string[]) {
   writeText(t.conclusionFile, stringify(c));
   const valid = (a: string) => { const s = readSig(c.data.signatures[a]); return !!s && !s.legacy && s.sha256 === h; };
   const stale = Object.keys(c.data.signatures).filter((a) => a !== m.id && !valid(a));
-  const both = [ctx.cfg.parties["spec-owner"].agent, ctx.cfg.parties.implementer.agent].every(valid);
+  const sideSigned = (r: Role) => ctx.cfg.parties[r].members.some((x) => valid(x.agent));
+  const both = sideSigned("spec-owner") && sideSigned("implementer");
   if (stale.length) log(`note: the conclusion text differs from what ${stale.join(", ")} signed; they must sign again`);
   if (both) {
     t.doc.data.state = "agreed";
-    t.doc.data.waiting_for = decider(ctx.cfg, t.doc.data.level);
-  } else t.doc.data.waiting_for = counterpartAgent(ctx.cfg, m.role);
+    t.doc.data.waiting_for = approverOf(ctx.cfg, t.doc.data.level, t.doc.data);
+  } else t.doc.data.waiting_for = counterpartAgent(ctx.cfg, m.role, t.doc.data);
   save(ctx, t);
   log(both ? `${t.id} agreed; waiting for decision by ${t.doc.data.waiting_for}` : `signed; waiting for ${t.doc.data.waiting_for} to sign`);
 }
@@ -260,10 +272,11 @@ export function cmdSign(ctx: Ctx, pos: string[]) {
 export function cmdDecide(ctx: Ctx, pos: string[], f: Flags) {
   const m = me(ctx);
   if (m.kind !== "human") throw new CliError("only a human decides");
-  if (!pos.length) throw new CliError('usage: collab decide <ID>[=option] [<ID>[=option] ...] --decision approve|park|reject [--option O] [--note N]');
+  if (!pos.length) throw new CliError('usage: collab decide <ID>[=option] [<ID>[=option] ...] --decision approve|park|reject|return [--option O] [--note N]');
   const decision = need(f, "decision");
-  const map: Record<string, State> = { approve: "approved", park: "parked", reject: "rejected" };
-  if (!map[decision]) throw new CliError("--decision approve|park|reject");
+  const map: Record<string, State> = { approve: "approved", park: "parked", reject: "rejected", return: "discussing" };
+  if (!map[decision]) throw new CliError("--decision approve|park|reject|return");
+  if (decision === "return" && !str(f, "note")) throw new CliError('return needs a reason: --note "what to rework"');
   // validate everything first, write nothing on error
   const items = pos.map((arg) => {
     const i = arg.indexOf("=");
@@ -271,7 +284,9 @@ export function cmdDecide(ctx: Ctx, pos: string[], f: Flags) {
     const option = i < 0 ? str(f, "option") : arg.slice(i + 1);
     const t = getTicket(ctx, id);
     const d = t.doc.data;
-    if (levelIdx(d.level) >= 2 && m.role !== "spec-owner") throw new CliError(`${t.id}: ${d.level} is decided by ${ctx.cfg.parties["spec-owner"].human}`);
+    if (!canDecide(ctx.cfg, m.id, d.level))
+      throw new CliError(`${t.id}: ${m.id} may not decide ${d.level} (${levelIdx(d.level) >= 2 ? `spec side, per approve: ${ctx.cfg.parties["spec-owner"].approve[d.level]}` : "spec side or implementer human"}); ask ${approverOf(ctx.cfg, d.level, d)}`);
+    if (decision === "return" && d.state !== "agreed") throw new CliError(`${t.id}: return sends back an agreed conclusion; it is ${d.state}`);
     if (!TRANSITIONS[d.state as State].includes(map[decision])) throw new CliError(`${t.id}: cannot ${decision} a ticket in state ${d.state}`);
     return { t, option };
   });
@@ -279,7 +294,11 @@ export function cmdDecide(ctx: Ctx, pos: string[], f: Flags) {
     const d = t.doc.data;
     d.decision = { by: m.id, decision, at: nowIso(), ...(option ? { option } : {}), ...(str(f, "note") ? { note: str(f, "note") } : {}) };
     d.state = map[decision];
-    d.waiting_for = decision !== "approve" ? "none" : levelIdx(d.level) >= 2 || m.role === "spec-owner" ? ctx.cfg.parties["spec-owner"].agent : ctx.cfg.parties.implementer.agent;
+    if (decision === "return") {
+      // the conclusion goes back for rework: signatures void, the spec-side assignee picks it up
+      if (exists(t.conclusionFile)) { const c = parse(readText(t.conclusionFile)); c.data.signatures = {}; writeText(t.conclusionFile, stringify(c)); }
+      d.waiting_for = sideAgent(ctx.cfg, "spec-owner", d);
+    } else d.waiting_for = decision !== "approve" ? "none" : levelIdx(d.level) >= 2 || m.role === "spec-owner" ? sideAgent(ctx.cfg, "spec-owner", d) : ctx.cfg.parties.implementer.agent;
     save(ctx, t);
     log(`${t.id} ${d.state}${option ? ` (${option})` : ""}; waiting for ${d.waiting_for}`);
   }
@@ -305,8 +324,8 @@ export function cmdState(ctx: Ctx, pos: string[], f: Flags) {
     if (!TRANSITIONS[d.state as State].includes(to)) throw new CliError(`invalid transition ${d.state} -> ${to}`);
     if (["approved", "parked", "rejected"].includes(to)) throw new CliError("use `collab decide` for approve/park/reject");
     if (to === "in-spec") {
-      const owner = ctx.cfg.parties["spec-owner"].human;
-      if (d.decision?.by !== owner)
+      const owner = specApproverOf(ctx.cfg, d.level, d);
+      if (!(d.decision?.decision === "approve" && d.decision?.by && canChangeSpec(ctx.cfg, d.decision.by, d.level)))
         throw new CliError(`a spec change needs a decision by ${owner} (now: ${d.decision?.by ?? "none"}). Ask ${owner} to \`collab decide ${t.id} --decision approve\`.`);
       d.spec_change_ref = need(f, "ref"); d.waiting_for = ctx.cfg.parties.implementer.agent;
     }
@@ -314,7 +333,7 @@ export function cmdState(ctx: Ctx, pos: string[], f: Flags) {
       if (levelIdx(d.level) >= 2 && d.state !== "in-spec" && d.state !== "approved") throw new CliError("T2/T3 must be approved first");
       d.conformed_ref = need(f, "ref"); d.waiting_for = "none";
     }
-    if (to === "discussing") d.waiting_for = m.kind === "agent" ? counterpartAgent(ctx.cfg, m.role) : d.waiting_for;
+    if (to === "discussing") d.waiting_for = m.kind === "agent" ? counterpartAgent(ctx.cfg, m.role, d) : d.waiting_for;
     d.state = to;
   }
   save(ctx, t);
@@ -411,7 +430,17 @@ export function cmdNext(ctx: Ctx, f: Flags) {
   for (const w of freshness(ctx.specRoot)) log("WARN  " + w);
   const owner = ctx.cfg.parties["spec-owner"];
   const impl = ctx.cfg.parties.implementer;
-  const mine = listTickets(ctx.specRoot, ctx.cfg).filter((t) => t.doc.data.waiting_for === m.id);
+  const all = listTickets(ctx.specRoot, ctx.cfg);
+  const mine = all.filter((t) => t.doc.data.waiting_for === m.id);
+  // the spec owner also sees tickets nobody on the spec side has been given yet
+  const team = owner.members.length > 1;
+  const unassigned = team && m.role === "spec-owner" && m.seat === "owner" && m.kind === "human"
+    ? all.filter((t) => !t.doc.data.assignee && ["open", "discussing"].includes(t.doc.data.state) && t.doc.data.waiting_for === owner.agent) : [];
+  if (unassigned.length) {
+    log(`not assigned yet (they wait on ${owner.agent} until you assign them):`);
+    for (const t of unassigned) log(`  ${t.id}  ${t.doc.data.level}  ${t.doc.data.title}\n     ${C} assign ${t.id} <${owner.members.map((x) => x.agent).join(" | ")}>`);
+    log("");
+  }
   if (!mine.length) { log(`nothing waiting for ${m.id}.`); return; }
   for (const t of mine) {
     const d = t.doc.data;
@@ -422,20 +451,30 @@ export function cmdNext(ctx: Ctx, f: Flags) {
     const h = t.conclusion ? conclusionHash(t.conclusion.body) : "";
     const myValid = (() => { const s = readSig(sigs[m.id]); return !!s && !s.legacy && s.sha256 === h; })();
     const last = t.turns.at(-1);
-    const allAgree = !!last && last.by !== m.id && (() => { const st = Object.values(stances(last.doc.body)); return st.length > 0 && st.every((x) => x === "agree"); })();
+    const esc = openEscalation(d);
+    const allAgree = !!last && sideOf(ctx.cfg, last.by) !== m.role && (() => { const st = Object.values(stances(last.doc.body)); return st.length > 0 && st.every((x) => x === "agree"); })();
+    if (esc && m.kind === "human" && m.seat === "owner") {
+      steps.push(`escalated by ${esc.by}: "${esc.note}"`, `read ${conv}, decide that point`, `${C} resolve ${id} --note "<your answer>"   (back to ${esc.waiting_was ?? d.assignee ?? owner.agent}; add --assign <agent> to hand it to someone else)`);
+      log(`${id}  ${d.level}  ${d.state}  ${d.title}`);
+      steps.forEach((s, i) => log(`  ${i + 1}. ${s}`));
+      continue;
+    }
     switch (d.state) {
       case "open": case "discussing":
         if (m.kind !== "agent") { steps.push(`waiting on you as a human: read ${conv} and tell your agent what to do`); break; }
         if (t.conclusion && !myValid) steps.push(`read ${shp(t.conclusionFile)}; if it is fair: ${C} sign ${id} (do not edit it; disagree? say so in a turn)`);
         else if (allAgree || t.turns.length >= ctx.cfg.max_turns_per_ticket) steps.push(`${C} conclude ${id}`, `write ${shp(t.conclusionFile)}: conclusion, open disagreements as options, rejected alternatives`, `${C} sign ${id}`);
-        else steps.push(`read the ticket and the last turn in ${conv}`, `${C} reply ${id} --points P1[,P2]`, "write the new turn file: one section per point, agree | disagree | need data, reasons, sources (or \"not verified\")",
-          "if every point is agreed, conclude instead of replying");
+        else steps.push(...(Array.isArray(d.escalations) ? d.escalations.filter((e: any) => e.resolution).slice(-1).map((e: any) => `the spec owner answered your escalation: "${e.resolution}"`) : []),
+          `read the ticket and the last turn in ${conv}`, `${C} reply ${id} --points P1[,P2]`, "write the new turn file: one section per point, agree | disagree | need data, reasons, sources (or \"not verified\")",
+          "if every point is agreed, conclude instead of replying",
+          ...(m.role === "spec-owner" && m.seat === "specialist" ? [`a point only the spec owner can decide? ${C} escalate ${id} --note "<the question>"`] : []));
         break;
       case "agreed":
-        steps.push(`read the options in ${shp(t.conclusionFile)} (Open disagreements)`, `${C} decide ${id}=<option> --decision approve|park|reject`);
+        steps.push(`read the options in ${shp(t.conclusionFile)} (Open disagreements)`, `${C} decide ${id}=<option> --decision approve|park|reject`,
+          ...(m.role === "spec-owner" ? [`not right yet? ${C} decide ${id} --decision return --note "<what to rework>"   (back to ${sideAgent(ctx.cfg, "spec-owner", d)}, signatures void)`] : []));
         break;
       case "approved":
-        if (m.id === owner.agent) steps.push(`change the spec in a separate PR (spec files only), per decision "${d.decision?.option ?? ""}"`, "after merge, the spec owner tags it: git tag vX.Y.Z && git push origin refs/tags/vX.Y.Z", `then: ${C} state ${id} in-spec --ref vX.Y.Z`);
+        if (sideOf(ctx.cfg, m.id) === "spec-owner") steps.push(`change the spec in a separate PR (spec files only), per decision "${d.decision?.option ?? ""}"`, "after merge, the spec owner tags it: git tag vX.Y.Z && git push origin refs/tags/vX.Y.Z", `then: ${C} state ${id} in-spec --ref vX.Y.Z`);
         else steps.push(`implement the decision "${d.decision?.option ?? ""}" in code (code-only fix)`, `${C} state ${id} conformed --ref <spec tag the code follows>`);
         break;
       case "in-spec":
@@ -557,4 +596,61 @@ export function cmdSync(ctx: Ctx) {
   // merged conv/* branches are noise; list them so the human can delete when they like
   const stale = git(root, ["branch", "--merged", base, "--list", "conv/*", "decide/*", "spec-*"], true).split("\n").map((x) => x.trim()).filter(Boolean);
   if (stale.length) log(`merged local branches you can delete: git -C ${shp(root)} branch -d ${stale.join(" ")}`);
+}
+
+// ---------------------------------------------------------------- spec-side team: assign, escalate, resolve
+/** The spec owner gives a ticket to a spec-side agent (a specialist, or the owner's own agent). */
+export function cmdAssign(ctx: Ctx, pos: string[]) {
+  const m = me(ctx);
+  if (m.role !== "spec-owner" || m.seat !== "owner") throw new CliError(`only the spec owner (${ctx.cfg.parties["spec-owner"].human}) assigns tickets`);
+  const t = getTicket(ctx, pos[0]);
+  const to = pos[1];
+  const spec = ctx.cfg.parties["spec-owner"];
+  if (!to || !spec.members.some((x) => x.agent === to)) throw new CliError(`usage: collab assign ${t.id} <agent>; spec-side agents: ${spec.members.map((x) => x.agent).join(", ")}`);
+  const d = t.doc.data;
+  const before = sideAgent(ctx.cfg, "spec-owner", d);
+  d.assignee = to;
+  d.assigned_by = m.id;
+  if (d.waiting_for === before || (d.waiting_for === spec.agent && spec.members.some((x) => x.agent === d.waiting_for))) d.waiting_for = to;
+  save(ctx, t);
+  log(`${t.id} assigned to ${to}; waiting for ${d.waiting_for}`);
+}
+
+/** A specialist hands a point the spec owner must decide; the ticket waits on the owner until resolved. */
+export function cmdEscalate(ctx: Ctx, pos: string[], f: Flags) {
+  const m = me(ctx);
+  if (m.role !== "spec-owner") throw new CliError("escalate is for the spec side: the implementer raises a level or asks in a turn");
+  if (m.seat === "owner") throw new CliError("the spec owner decides directly; no need to escalate");
+  const t = getTicket(ctx, pos[0]);
+  const d = t.doc.data;
+  if (m.kind === "agent") mayWork(ctx, m, d, t);
+  else if (sideAgent(ctx.cfg, "spec-owner", d) !== m.member.agent) throw new CliError(`${t.id} is not assigned to ${m.member.agent}`);
+  if (openEscalation(d)) throw new CliError(`${t.id} is already escalated`);
+  const note = str(f, "note");
+  if (!note) throw new CliError('say what the owner must decide: --note "P2: which retention rule?"');
+  d.escalations = [...(Array.isArray(d.escalations) ? d.escalations : []), { by: m.id, at: nowIso(), note, waiting_was: d.waiting_for }];
+  d.waiting_for = ctx.cfg.parties["spec-owner"].human;
+  save(ctx, t);
+  log(`${t.id} escalated to ${d.waiting_for}`);
+}
+
+/** The spec owner answers an escalation; the ticket goes back to its assignee (or `--assign` someone else). */
+export function cmdResolve(ctx: Ctx, pos: string[], f: Flags) {
+  const m = me(ctx);
+  if (m.role !== "spec-owner" || m.seat !== "owner" || m.kind !== "human") throw new CliError(`only the spec owner (${ctx.cfg.parties["spec-owner"].human}) resolves an escalation`);
+  const t = getTicket(ctx, pos[0]);
+  const d = t.doc.data;
+  const e = openEscalation(d);
+  if (!e) throw new CliError(`${t.id} has no open escalation`);
+  const note = str(f, "note");
+  if (!note) throw new CliError('write the answer: --note "P2: keep 90 days"');
+  Object.assign(e, { resolved_by: m.id, resolved_at: nowIso(), resolution: note });
+  const re = str(f, "assign");
+  if (re) {
+    if (!ctx.cfg.parties["spec-owner"].members.some((x) => x.agent === re)) throw new CliError(`--assign must be a spec-side agent`);
+    d.assignee = re;
+  }
+  d.waiting_for = re ?? (e.waiting_was && e.waiting_was !== "none" ? e.waiting_was : sideAgent(ctx.cfg, "spec-owner", d));
+  save(ctx, t);
+  log(`${t.id} resolved; waiting for ${d.waiting_for}`);
 }
