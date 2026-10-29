@@ -21,7 +21,7 @@ export interface CollabEvent {
 
 export const EVENT_TYPES = [
   "ticket.opened", "turn.added", "turn.edited", "level.raised", "level.lowered", "ticket.concluded", "conclusion.edited",
-  "conclusion.signed", "decision.recorded", "state.changed", "state.reverted", "file.removed",
+  "conclusion.signed", "decision.recorded", "ticket.assigned", "ticket.escalated", "escalation.resolved", "state.changed", "state.reverted", "file.removed",
   "pr.merged", "spec.released", "reminder.sent", "runner.agent_called", "runner.pushed", "runner.discarded", "runner.skipped",
 ] as const;
 
@@ -92,14 +92,25 @@ export function buildEvents(root: string, cfg: Config, opts: { ref?: string; sig
         if (f.status === "D") { push("file.removed", ctime, tid, { ...base(who), file: f.file }, c.sha + f.file); continue; }
         const tm = TURN_RE.exec(f.file);
         if (f.file === "ticket.md") {
-          const a = after!.data, b = before?.data;
+          const a = after!.data;
+          let b = before?.data;
           // the ticket's own clock only counts when this commit moved it; a revert or a hand edit carries a stale one
           const when = b && a.updated_at !== b.updated_at && Date.parse(String(a.updated_at)) >= Date.parse(String(b.updated_at)) ? toIso(a.updated_at, ctime) : ctime;
-          if (!b) { push("ticket.opened", toIso(a.opened_at, ctime), tid, { ...base(a.opened_by ?? who), title: a.title, reason: a.level_reason, requirement: a.requirement, spec_ref: a.spec_ref }, c.sha); continue; }
+          if (!b) {
+            push("ticket.opened", toIso(a.opened_at, ctime), tid, { ...base(a.opened_by ?? who), title: a.title, reason: a.level_reason, requirement: a.requirement, spec_ref: a.spec_ref }, c.sha);
+            b = { state: "open", level: a.level };          // a ticket that arrives already worked on still reports what happened to it
+          }
           if (a.level !== b.level) {
             const up = LEVELS.indexOf(a.level) > LEVELS.indexOf(b.level);
             push(up ? "level.raised" : "level.lowered", when, tid, { ...base(a.level_override_by && !up ? a.level_override_by : who), from: b.level, to: a.level, reason: a.level_reason }, c.sha + "lvl");
           }
+          if (a.assignee && a.assignee !== b.assignee) push("ticket.assigned", ctime, tid, { ...base(a.assigned_by ?? who), to: a.assignee, from: b.assignee }, c.sha + "asg");
+          const ea = Array.isArray(a.escalations) ? a.escalations : [], eb = Array.isArray(b.escalations) ? b.escalations : [];
+          ea.forEach((e: any, i: number) => {
+            const pe = eb[i];
+            if (!pe) push("ticket.escalated", toIso(e.at, ctime), tid, { ...base(e.by ?? who), note: e.note }, c.sha + "esc" + i);
+            if (e.resolved_at && !pe?.resolved_at) push("escalation.resolved", toIso(e.resolved_at, ctime), tid, { ...base(e.resolved_by ?? who), resolution: e.resolution }, c.sha + "res" + i);
+          });
           const dec = a.decision, pdec = b.decision;
           if (dec && JSON.stringify(dec) !== JSON.stringify(pdec))
             push("decision.recorded", toIso(dec.at, ctime), tid, { ...base(dec.by ?? who), decision: dec.decision, option: dec.option, note: dec.note }, c.sha + "dec");

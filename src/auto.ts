@@ -306,7 +306,7 @@ export function cmdStatus(ctx: Ctx) {
   const t = now();
   const cfg = ctx.cfg;
   say(`autonomy: ${cfg.autonomy}`);
-  const ids = Object.values(cfg.parties).flatMap((p) => [p.agent]);
+  const ids = Object.values(cfg.parties).flatMap((p) => (p.members ?? [p]).map((x: any) => x.agent));
   for (const id of ids) {
     const hb: Heartbeat | undefined = sig[`heartbeat/${id}.json`];
     say(hb ? `${id.padEnd(10)} last check ${ago(hb.at, t).padEnd(8)} collabkit ${hb.collabkit}` : `${id.padEnd(10)} no runner seen`);

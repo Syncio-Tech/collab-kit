@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0 - 2026-10-29
+- **Spec-side team**: `parties.spec-owner.members` adds specialists (each with an agent and a GitHub login) next to the
+  owner. Configs without `members` behave exactly as before.
+  - `collab assign <id> <agent>` (owner): tickets from the implementer wait on the owner's agent until assigned.
+    A spec-side agent may only work tickets assigned to it; the owner's agent may always.
+  - `collab escalate <id> --note` (specialist) / `collab resolve <id> --note [--assign <agent>]` (owner).
+  - `collab decide <id> --decision return --note` (owner or allowed approver): an agreed conclusion goes back to the
+    assignee, signatures void.
+  - `approve` table per level (`{T0: specialist, T1: specialist, T2: owner, T3: owner}` by default): who on the spec
+    side may decide and change the spec. The owner always may. Implementer humans still decide T0/T1.
+  - Turn and point caps count per side. A conclusion needs one signature per side.
+  - Identity is checked per member login. `INDEX.md` gets an `assignee` column (team only); `next` shows the owner
+    unassigned tickets, escalations and approvals; `log` / `viz` add assigned / escalated / resolved and specialist lanes.
+- `collab log`: a ticket that arrives already worked on (opened and decided in one commit) still reports its decision
+  and state changes.
+
 ## 0.4.3 - 2026-10-28
 - **No stray git lock files.** Every git call runs with `GIT_OPTIONAL_LOCKS=0`, so `check` / `next` / `inbox` never
   take `.git/index.lock` (git refreshes the index opportunistically on `diff` / `status`). Every fetch, pull and

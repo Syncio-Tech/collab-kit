@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { Config, allIds, githubOf, identify } from "./config.js";
+import { Config, allIds, canChangeSpec, canDecide, githubOf, identify, sideOf } from "./config.js";
 import { parse } from "./frontmatter.js";
 import { changedSince, hasRef, isRepo, showAt } from "./git.js";
 import { renderIndex, indexPath } from "./indexmd.js";
@@ -76,17 +76,27 @@ export function check(root: string, cfg: Config, opts: CheckOpts = {}): Diag[] {
         try {
           const who = identify(cfg, dec.by);
           if (who.kind !== "human") err("decision-by-agent", f, "only a human can decide");
-          else if (levelIdx(d.level) >= 2 && who.role !== "spec-owner") err("decision-wrong-human", f, `${d.level} must be decided by the spec-owner human (${cfg.parties["spec-owner"].human})`);
+          else if (!canDecide(cfg, dec.by, d.level)) err("decision-wrong-human", f, `${dec.by} may not decide ${d.level} (${levelIdx(d.level) >= 2 ? `spec side, approve: ${cfg.parties["spec-owner"].approve[d.level]}` : "spec side or implementer human"})`);
         } catch { err("decision-by", f, `decision.by \`${dec.by}\` is not a known id`); }
       }
     }
+    if (d.decision?.decision === "return" && d.decision.by && !canDecide(cfg, d.decision.by, d.level))
+      err("decision-wrong-human", f, `${d.decision.by} may not return a ${d.level} conclusion`);
+    // spec-side team
+    if (d.assignee && !cfg.parties["spec-owner"].members.some((x) => x.agent === d.assignee))
+      err("assignee", f, `assignee \`${d.assignee}\` is not a spec-side agent (${cfg.parties["spec-owner"].members.map((x) => x.agent).join(", ")})`);
+    for (const e of Array.isArray(d.escalations) ? d.escalations : []) {
+      if (sideOf(cfg, e.by) !== "spec-owner") err("escalation", f, `escalation by \`${e.by}\`: only the spec side escalates`);
+      if (e.resolved_by) { try { const w = identify(cfg, e.resolved_by); if (!(w.role === "spec-owner" && w.seat === "owner" && w.kind === "human")) err("escalation", f, `escalation resolved by \`${e.resolved_by}\`: only the spec owner resolves`); } catch { err("escalation", f, `unknown resolved_by \`${e.resolved_by}\``); } }
+    }
     if (d.state === "conformed" && !d.conformed_ref) err("conformed-ref", f, "state conformed needs `conformed_ref` (the spec tag the code now matches)");
-    if (d.state === "conformed" && levelIdx(d.level) >= 2 && !d.decision) err("conformed-skip", f, "T2/T3 cannot reach conformed without an approval decision");
+    if (d.state === "conformed" && levelIdx(d.level) >= 2 && d.decision?.decision !== "approve") err("conformed-skip", f, "T2/T3 cannot reach conformed without an approval decision");
     if (d.state === "agreed" || ["approved", "in-spec", "conformed"].includes(d.state)) {
       if (!t.conclusion) err("conclusion-missing", f, `state ${d.state} needs ${CONCLUSION}`);
       else {
         const sigs = t.conclusion.data.signatures ?? {};
-        for (const r of ["spec-owner", "implementer"] as const) if (!sigs[cfg.parties[r].agent]) err("conclusion-unsigned", rel(root, t.conclusionFile), `missing signature of ${cfg.parties[r].agent}`);
+        for (const r of ["spec-owner", "implementer"] as const)
+          if (!cfg.parties[r].members.some((x) => sigs[x.agent])) err("conclusion-unsigned", rel(root, t.conclusionFile), `missing a signature from the ${r} side (${cfg.parties[r].members.map((x) => x.agent).join(" or ")})`);
       }
     }
 
@@ -103,8 +113,8 @@ export function check(root: string, cfg: Config, opts: CheckOpts = {}): Diag[] {
     }
 
     // a spec change is always decided by the spec owner's human, whatever the level
-    if ((d.state === "in-spec" || d.spec_change_ref) && d.decision?.by && d.decision.by !== cfg.parties["spec-owner"].human)
-      err("spec-change-decider", f, `the spec changes only on a decision by ${cfg.parties["spec-owner"].human} (decided by ${d.decision.by})`);
+    if ((d.state === "in-spec" || d.spec_change_ref) && d.decision?.by && !canChangeSpec(cfg, d.decision.by, d.level))
+      err("spec-change-decider", f, `the spec changes only on a decision by a spec-side human allowed for ${d.level} (decided by ${d.decision.by})`);
 
     // caps: stop endless back-and-forth and point-splitting
     const points = new Set(t.turns.flatMap((x) => x.doc.data.points ?? []));
@@ -125,10 +135,11 @@ export function check(root: string, cfg: Config, opts: CheckOpts = {}): Diag[] {
       expect = turn.n + 1;
       if (turn.doc.data.by !== turn.by) err("turn-by", tf, `frontmatter by \`${turn.doc.data.by}\` must match file name \`${turn.by}\``);
       if (!ids.includes(turn.by)) err("turn-by", tf, `\`${turn.by}\` is not a known id`);
+      const sideKey = sideOf(cfg, turn.by) ?? turn.by;          // caps count per side, not per agent
       for (const p of turn.doc.data.points ?? []) {
         perPoint[p] ??= {};
-        perPoint[p][turn.by] = (perPoint[p][turn.by] ?? 0) + 1;
-        if (perPoint[p][turn.by] > cfg.max_turns_per_point) err("turns-per-point", tf, `${turn.by} already used ${cfg.max_turns_per_point} turns on point ${p}; escalate to T2 and record the options in the conclusion`);
+        perPoint[p][sideKey] = (perPoint[p][sideKey] ?? 0) + 1;
+        if (perPoint[p][sideKey] > cfg.max_turns_per_point) err("turns-per-point", tf, `the ${sideKey} side already used ${cfg.max_turns_per_point} turns on point ${p}; escalate to T2 and record the options in the conclusion`);
       }
     }
     for (const [p, by] of Object.entries(perPoint)) {

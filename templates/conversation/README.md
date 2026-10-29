@@ -62,6 +62,17 @@ Nobody pushes to `main`. Ticket ids can be short: `4` = `SYNC-004`.
 8. No secrets, credentials or customer data in the conversation.
 9. At most `max_new_tickets_per_week` new tickets per agent per week, except T3.
 
+## Spec-side team (optional)
+
+When `parties.spec-owner.members` lists specialists, the spec side is a team: one owner, one or more specialists,
+each with an agent and a GitHub login.
+- A ticket the implementer opens waits on the owner's agent until the owner assigns it: `collab assign <id> <agent>`.
+- The assignee works it with the implementer. Turn and point caps count per side, not per agent.
+- A point only the owner can decide: `collab escalate <id> --note "..."`; the owner answers with `collab resolve`.
+- Both sides sign; then the level's approver decides (`approve` in config: by default T0/T1 a specialist may, T2/T3 the owner).
+  The owner may send an agreed conclusion back: `collab decide <id> --decision return --note "..."` (signatures void).
+- A spec change needs an approval by a spec-side human allowed for that level.
+
 ## States
 
 `open` → `discussing` → `agreed` (conclusion signed by both agents) → `approved` (human decision)
